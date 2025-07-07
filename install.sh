@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Raspberry Pi Facial Recognition System Installer
-# This script handles the complete installation and setup of the system
+# Raspberry Pi Facial Recognition System Installation Script
+# Handles complete system installation and dependency management
 
 set -e  # Exit on any error
 
@@ -18,211 +18,231 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 
-# Check if script is run as root
+# Check if running as root
 if [[ $EUID -eq 0 ]]; then
-   error "This script should not be run as root. Please run as a regular user."
+   error "This script should not be run as root"
+   info "Please run without sudo"
    exit 1
 fi
 
-# Check if running on Raspberry Pi
-if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
-    warning "This system may not be a Raspberry Pi. Some features might not work as expected."
+# Verify Raspbian OS
+if ! grep -q "Raspbian" /etc/os-release 2>/dev/null; then
+    warning "This system may not be running Raspbian OS"
+    warning "Some features might not work as expected"
 fi
 
-# Check for Python 3.7+
-if ! command -v python3 &> /dev/null; then
-    error "Python 3 is not installed. Please install Python 3.7 or newer."
-    exit 1
-fi
+# Function to install Python 3.7 if needed
+install_python37() {
+    if ! command -v python3.7 &> /dev/null; then
+        log "Installing Python 3.7..."
+        
+        # Install build dependencies
+        sudo apt-get install -y build-essential tk-dev libncurses5-dev \
+            libncursesw5-dev libreadline6-dev libdb5.3-dev libgdbm-dev \
+            libsqlite3-dev libssl-dev libbz2-dev libexpat1-dev liblzma-dev \
+            zlib1g-dev libffi-dev
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-if (( $(echo "$PYTHON_VERSION < 3.7" | bc -l) )); then
-    error "Python 3.7 or newer is required. Found version $PYTHON_VERSION"
-    exit 1
-fi
-
-# Run system compatibility check
-log "Running system compatibility check..."
-if ! ./check_system.sh; then
-    error "System compatibility check failed. Please fix the issues and try again."
-    exit 1
-fi
-
-# Create project structure
-log "Creating project structure..."
-mkdir -p data/{known_faces,unknown_faces,logs,backups}
-mkdir -p ssl
-mkdir -p config
-
-# Check and install system dependencies
-log "Checking and installing system dependencies..."
-DEPS=(
-    "python3-pip"
-    "python3-dev"
-    "python3-venv"
-    "build-essential"
-    "cmake"
-    "pkg-config"
-    "libjpeg-dev"
-    "libtiff5-dev"
-    "libjasper-dev"
-    "libpng-dev"
-    "libavcodec-dev"
-    "libavformat-dev"
-    "libswscale-dev"
-    "libv4l-dev"
-    "libxvidcore-dev"
-    "libx264-dev"
-    "libgtk-3-dev"
-    "libcanberra-gtk*"
-    "libatlas-base-dev"
-    "gfortran"
-    "espeak"
-    "espeak-data"
-    "alsa-utils"
-    "pulseaudio"
-    "git"
-)
-
-# Update package list
-log "Updating package list..."
-sudo apt update
-
-# Install dependencies
-log "Installing system dependencies..."
-for dep in "${DEPS[@]}"; do
-    if ! dpkg -l | grep -q "^ii  $dep"; then
-        info "Installing $dep..."
-        sudo apt install -y "$dep"
+        # Download and compile Python 3.7
+        wget https://www.python.org/ftp/python/3.7.9/Python-3.7.9.tgz
+        tar xzf Python-3.7.9.tgz
+        cd Python-3.7.9
+        ./configure --enable-optimizations
+        make -j$(nproc)
+        sudo make altinstall
+        cd ..
+        rm -rf Python-3.7.9*
+        
+        # Create symbolic links
+        sudo update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.7 1
+        sudo update-alternatives --install /usr/bin/pip3 pip3 /usr/local/bin/pip3.7 1
     else
-        info "$dep is already installed"
+        info "Python 3.7 is already installed"
     fi
-done
-
-# Create and activate virtual environment
-log "Setting up Python virtual environment..."
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
-fi
-source venv/bin/activate
-
-# Upgrade pip
-log "Upgrading pip..."
-python3 -m pip install --upgrade pip
-
-# Install Python packages
-log "Installing Python packages (this may take a while)..."
-pip install -r requirements.txt
-
-# Configure camera
-log "Configuring camera..."
-if ! ls /dev/video* &> /dev/null; then
-    warning "No video devices found. Please check camera connection."
-    warning "If using Pi Camera, make sure it's enabled in raspi-config"
-fi
-
-# Test camera access
-if [ -e /dev/video0 ]; then
-    log "Testing camera access..."
-    if ! python3 -c "import cv2; cap = cv2.VideoCapture(0); ret, frame = cap.read(); cap.release(); assert ret" 2>/dev/null; then
-        warning "Camera test failed. Please check permissions and connections."
-    else
-        info "Camera test successful"
-    fi
-fi
-
-# Configure audio
-log "Configuring audio..."
-if ! command -v espeak &> /dev/null; then
-    warning "espeak not found. Voice greetings may not work."
-else
-    log "Testing audio system..."
-    if ! espeak "Audio system test" 2>/dev/null; then
-        warning "Audio test failed. Please check speaker connection and volume."
-    else
-        info "Audio test successful"
-    fi
-fi
-
-# Set up systemd service
-log "Setting up systemd service..."
-sudo tee /etc/systemd/system/facial-recognition.service > /dev/null << EOF
-[Unit]
-Description=Facial Recognition System
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$PWD
-Environment=PATH=$PWD/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$PWD/venv/bin/python face_recognition.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Set up log rotation
-log "Setting up log rotation..."
-sudo tee /etc/logrotate.d/facial-recognition > /dev/null << EOF
-/var/log/facial-recognition/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 640 $USER $USER
 }
-EOF
 
-# Create log directory
-sudo mkdir -p /var/log/facial-recognition
-sudo chown -R $USER:$USER /var/log/facial-recognition
+# Function to install system dependencies
+install_system_deps() {
+    log "Installing system dependencies..."
+    
+    # Update package lists
+    sudo apt-get update
+    
+    # Install required packages
+    sudo apt-get install -y \
+        python3-dev \
+        python3-pip \
+        python3-venv \
+        build-essential \
+        cmake \
+        pkg-config \
+        libjpeg-dev \
+        libtiff5-dev \
+        libjasper-dev \
+        libpng-dev \
+        libavcodec-dev \
+        libavformat-dev \
+        libswscale-dev \
+        libv4l-dev \
+        libxvidcore-dev \
+        libx264-dev \
+        libgtk-3-dev \
+        libcanberra-gtk* \
+        libatlas-base-dev \
+        gfortran \
+        libhdf5-dev \
+        libhdf5-serial-dev \
+        libhdf5-103 \
+        libqt4-test \
+        libqtgui4 \
+        python3-opencv \
+        espeak \
+        espeak-data \
+        alsa-utils \
+        pulseaudio \
+        git \
+        wget \
+        curl \
+        v4l-utils \
+        i2c-tools \
+        raspi-config \
+        rpi-update
 
-# Make scripts executable
-log "Setting permissions..."
-chmod +x *.sh
-chmod +x *.py
+    # Install picamera2 dependencies
+    sudo apt-get install -y \
+        python3-picamera2 \
+        python3-libcamera \
+        python3-kms++ \
+        python3-prctl \
+        libatlas-base-dev \
+        ffmpeg \
+        libopenjp2-7
+}
 
-# Generate initial configuration
-if [ ! -f "config.yml" ]; then
-    log "Generating initial configuration..."
-    cp config.yml.example config.yml
-fi
+# Function to configure camera and interfaces
+configure_interfaces() {
+    log "Configuring system interfaces..."
+    
+    # Enable camera
+    if ! grep -q "start_x=1" /boot/config.txt; then
+        echo "start_x=1" | sudo tee -a /boot/config.txt
+    fi
+    
+    # Enable I2C
+    if ! grep -q "dtparam=i2c_arm=on" /boot/config.txt; then
+        echo "dtparam=i2c_arm=on" | sudo tee -a /boot/config.txt
+    fi
+    
+    # Set GPU memory
+    if ! grep -q "gpu_mem=" /boot/config.txt; then
+        echo "gpu_mem=128" | sudo tee -a /boot/config.txt
+    fi
+    
+    # Add user to required groups
+    sudo usermod -a -G video,audio,gpio,i2c $USER
+}
 
-# Create SSL certificate for web interface
-if [ ! -f "ssl/cert.pem" ] && [ ! -f "ssl/key.pem" ]; then
-    log "Generating SSL certificate for web interface..."
-    mkdir -p ssl
-    openssl req -x509 -newkey rsa:4096 -nodes -out ssl/cert.pem -keyout ssl/key.pem -days 365 \
-        -subj "/C=US/ST=State/L=City/O=Organization/OU=Unit/CN=localhost"
-fi
+# Function to set up Python environment
+setup_python_env() {
+    log "Setting up Python environment..."
+    
+    # Create virtual environment
+    python3.7 -m venv venv
+    source venv/bin/activate
+    
+    # Upgrade pip
+    pip install --upgrade pip
+    
+    # Install Python packages with specific versions for Raspbian
+    pip install \
+        numpy==1.21.6 \
+        opencv-python==4.7.0.72 \
+        face-recognition==1.3.0 \
+        dlib==19.24.1 \
+        Pillow==9.5.0 \
+        pyttsx3==2.90 \
+        Flask==2.0.3 \
+        Flask-Login==0.6.2 \
+        Flask-WTF==1.1.1 \
+        Werkzeug==2.0.3 \
+        PyYAML==6.0.1 \
+        python-json-logger==2.0.7 \
+        click==8.1.7 \
+        schedule==1.2.0 \
+        psutil==5.9.5 \
+        cryptography==41.0.3 \
+        requests==2.31.0 \
+        picamera2==0.3.12 \
+        imutils==0.5.4
+}
 
-# Final setup
-log "Running final setup..."
-python3 setup.py
+# Function to verify installation
+verify_installation() {
+    log "Verifying installation..."
+    
+    # Verify Python
+    if ! python3.7 --version &>/dev/null; then
+        error "Python 3.7 installation failed"
+        exit 1
+    fi
+    
+    # Verify camera
+    if ! vcgencmd get_camera &>/dev/null; then
+        warning "Camera module not detected"
+    fi
+    
+    # Verify audio
+    if ! aplay -l &>/dev/null; then
+        warning "Audio device not detected"
+    fi
+    
+    # Verify face_recognition module
+    source venv/bin/activate
+    if ! python3.7 -c "import face_recognition" &>/dev/null; then
+        error "face_recognition module installation failed"
+        exit 1
+    fi
+    deactivate
+}
 
-# Installation complete
-log "Installation complete!"
-echo ""
-echo -e "${GREEN}=== INSTALLATION SUMMARY ===${NC}"
-echo -e "Project directory: ${BLUE}$PWD${NC}"
-echo -e "Virtual environment: ${BLUE}$PWD/venv${NC}"
-echo -e "Configuration: ${BLUE}$PWD/config.yml${NC}"
-echo -e "Log directory: ${BLUE}/var/log/facial-recognition${NC}"
-echo ""
-echo -e "${GREEN}=== NEXT STEPS ===${NC}"
-echo "1. Review and edit config.yml for your setup"
-echo "2. Add known faces using add_face.sh"
-echo "3. Start the system:"
-echo "   - Development: ./start.sh"
-echo "   - Production: sudo systemctl start facial-recognition"
-echo ""
-echo -e "${YELLOW}Note: For first-time setup, it's recommended to run in development mode first.${NC}"
-echo "See README.md for detailed usage instructions."
+# Main installation sequence
+main() {
+    log "Starting installation..."
+    
+    # Run system compatibility check
+    ./check_system.sh || exit 1
+    
+    # Install Python 3.7
+    install_python37
+    
+    # Install system dependencies
+    install_system_deps
+    
+    # Configure interfaces
+    configure_interfaces
+    
+    # Set up Python environment
+    setup_python_env
+    
+    # Create required directories
+    mkdir -p data/{known_faces,unknown_faces,logs,backups}
+    mkdir -p templates static/faces ssl
+    
+    # Set permissions
+    chmod +x *.sh
+    chmod +x *.py
+    
+    # Verify installation
+    verify_installation
+    
+    log "Installation completed successfully!"
+    echo ""
+    echo -e "${GREEN}=== Next Steps ===${NC}"
+    echo "1. Reboot the system: sudo reboot"
+    echo "2. Add faces using: ./add_face.sh"
+    echo "3. Start the system: ./start.sh"
+    echo ""
+    echo -e "${YELLOW}Note: A system reboot is required to apply all changes${NC}"
+}
 
-# Cleanup
-deactivate 
+# Run main installation
+main 
