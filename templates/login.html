@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Facial Recognition System{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center mt-5">
+        <div class="col-md-6 col-lg-4">
+            <div class="card shadow">
+                <div class="card-header bg-primary text-white text-center py-3">
+                    <h4 class="mb-0">
+                        <i class="fas fa-camera me-2"></i>
+                        Facial Recognition System
+                    </h4>
+                </div>
+                <div class="card-body p-4">
+                    <form method="POST" id="loginForm">
+                        <div class="text-center mb-4">
+                            <i class="fas fa-user-circle fa-3x text-muted"></i>
+                            <h5 class="mt-2">Administrator Login</h5>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="fas fa-user"></i>
+                                </span>
+                                <input type="text" class="form-control" id="username" 
+                                       name="username" required autofocus>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label for="password" class="form-label">Password</label>
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="fas fa-lock"></i>
+                                </span>
+                                <input type="password" class="form-control" id="password" 
+                                       name="password" required>
+                                <button class="btn btn-outline-secondary" type="button" 
+                                        id="togglePassword">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-sign-in-alt me-2"></i>
+                                Login
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="card-footer text-center py-3">
+                    <small class="text-muted">
+                        Contact system administrator if you need access
+                    </small>
+                </div>
+            </div>
+            
+            <!-- Version Info -->
+            <div class="text-center mt-3">
+                <small class="text-muted">
+                    Version 1.0.0 | <a href="#" data-bs-toggle="modal" 
+                                     data-bs-target="#systemInfoModal">System Info</a>
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Info Modal -->
+<div class="modal fade" id="systemInfoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">System Information</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <table class="table table-sm">
+                    <tr>
+                        <th>System Version:</th>
+                        <td>1.0.0</td>
+                    </tr>
+                    <tr>
+                        <th>Python Version:</th>
+                        <td>{{ python_version }}</td>
+                    </tr>
+                    <tr>
+                        <th>Operating System:</th>
+                        <td>{{ os_info }}</td>
+                    </tr>
+                    <tr>
+                        <th>Camera Status:</th>
+                        <td>
+                            {% if camera_active %}
+                            <span class="text-success">Active</span>
+                            {% else %}
+                            <span class="text-danger">Inactive</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Last Update:</th>
+                        <td>{{ last_update }}</td>
+                    </tr>
+                </table>
+                
+                <div class="mt-3">
+                    <h6>System Requirements:</h6>
+                    <ul class="small">
+                        <li>Raspberry Pi 3B+ or newer</li>
+                        <li>Python 3.7+</li>
+                        <li>2GB+ RAM</li>
+                        <li>Camera module or USB camera</li>
+                        <li>Internet connection</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Toggle password visibility
+    $('#togglePassword').click(function() {
+        const password = $('#password');
+        const icon = $(this).find('i');
+        
+        if (password.attr('type') === 'password') {
+            password.attr('type', 'text');
+            icon.removeClass('fa-eye').addClass('fa-eye-slash');
+        } else {
+            password.attr('type', 'password');
+            icon.removeClass('fa-eye-slash').addClass('fa-eye');
+        }
+    });
+    
+    // Form validation and submission
+    $('#loginForm').submit(function(e) {
+        e.preventDefault();
+        
+        const username = $('#username').val().trim();
+        const password = $('#password').val();
+        
+        if (!username || !password) {
+            showAlert('danger', 'Please enter both username and password');
+            return;
+        }
+        
+        // Show loading state
+        const submitBtn = $(this).find('button[type="submit"]');
+        const originalText = submitBtn.html();
+        submitBtn.prop('disabled', true)
+                .html('<span class="spinner-border spinner-border-sm me-2"></span>Logging in...');
+        
+        // Submit form
+        $.ajax({
+            url: $(this).attr('action') || window.location.pathname,
+            type: 'POST',
+            data: $(this).serialize(),
+            success: function(response) {
+                if (response.redirect) {
+                    window.location.href = response.redirect;
+                }
+            },
+            error: function(xhr) {
+                let message = 'Login failed';
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    message = response.error || message;
+                } catch (e) {}
+                
+                showAlert('danger', message);
+                submitBtn.prop('disabled', false).html(originalText);
+            }
+        });
+    });
+    
+    // Clear form on page load
+    $(document).ready(function() {
+        $('#loginForm')[0].reset();
+        $('#username').focus();
+    });
+    
+    // Prevent multiple submissions
+    let formSubmitted = false;
+    $('#loginForm').submit(function() {
+        if (formSubmitted) {
+            return false;
+        }
+        formSubmitted = true;
+        return true;
+    });
+    
+    // Auto-hide alerts after 5 seconds
+    setTimeout(function() {
+        $('.alert').fadeOut('slow');
+    }, 5000);
+</script>
+{% endblock %} 

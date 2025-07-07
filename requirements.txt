@@ -1,0 +1,35 @@
+# Core dependencies
+numpy==1.21.6  # Compatible with older Python versions
+opencv-python==4.7.0.72  # Stable version for Raspberry Pi
+face-recognition==1.3.0
+dlib==19.24.1  # Stable version for face-recognition
+Pillow==9.5.0  # For image processing
+
+# Camera support
+picamera2==0.3.12  # For Raspberry Pi camera
+v4l-utils  # For video device handling
+
+# Audio and speech
+pyttsx3==2.90
+espeak==0.5.0
+
+# Web interface
+Flask==2.0.3  # More compatible with older Python versions
+Flask-Login==0.6.2
+Flask-WTF==1.1.1
+Werkzeug==2.0.3  # Match Flask version
+
+# Configuration and logging
+PyYAML==6.0.1
+python-json-logger==2.0.7
+
+# Utilities
+click==8.1.7  # CLI tools
+schedule==1.2.0  # Task scheduling
+psutil==5.9.5  # System monitoring
+cryptography==41.0.3  # For encryption features
+requests==2.31.0  # For notifications
+
+# Optional dependencies
+python-telegram-bot==13.15  # Telegram notifications
+imutils==0.5.4  # Image processing utilities 

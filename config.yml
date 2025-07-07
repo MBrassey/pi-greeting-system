@@ -1,0 +1,107 @@
+# Raspberry Pi Facial Recognition System Configuration
+
+# Recognition settings
+recognition:
+  # Face detection and recognition settings
+  tolerance: 0.6  # Lower = stricter matching (0.4-0.6 recommended)
+  model: 'hog'    # 'hog' (faster) or 'cnn' (more accurate)
+  frame_rate: 30  # Frames per second to process
+  resolution: [640, 480]  # Camera resolution [width, height]
+  min_face_size: 20  # Minimum face size in pixels
+  blur_threshold: 100  # Minimum blur threshold (lower = more strict)
+
+# Camera settings
+camera:
+  device: 0  # Camera device index (usually 0 for first camera)
+  type: 'picamera'  # 'usb' or 'picamera'
+  flip_horizontal: false  # Flip camera horizontally
+  flip_vertical: false   # Flip camera vertically
+  brightness: 50  # Camera brightness (0-100)
+  contrast: 50    # Camera contrast (0-100)
+
+# Audio and greeting settings
+greeting:
+  enabled: true  # Enable/disable voice greetings
+  volume: 0.8    # Volume level (0.0-1.0)
+  cooldown: 30   # Seconds between greetings for same person
+  language: 'en'  # Speech language
+  rate: 150      # Speech rate (words per minute)
+  custom_greetings:  # Custom greetings per person (optional)
+    "John Doe": "Welcome back, sir"
+    "Jane Doe": "Good to see you again, madam"
+
+# Storage settings
+storage:
+  base_dir: 'data'  # Base directory for all data
+  known_faces_dir: 'data/known_faces'  # Directory for known face images
+  unknown_faces_dir: 'data/unknown_faces'  # Directory for unknown face images
+  logs_dir: 'data/logs'  # Directory for log files
+  max_unknown_age: 30  # Days to keep unknown faces
+  auto_clean: true    # Automatically clean old unknown faces
+  backup_enabled: true  # Enable automatic backups
+  backup_interval: 7   # Days between backups
+
+# Logging settings
+logging:
+  level: 'INFO'  # Logging level (DEBUG, INFO, WARNING, ERROR)
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  file_enabled: true  # Enable logging to file
+  console_enabled: true  # Enable logging to console
+  max_size: 10485760  # Max log file size in bytes (10MB)
+  backup_count: 5     # Number of log files to keep
+
+# Web interface settings
+web_interface:
+  enabled: true  # Enable web interface
+  host: '0.0.0.0'  # Listen on all interfaces
+  port: 8080  # Web interface port
+  ssl_enabled: false  # Enable HTTPS
+  ssl_cert: 'ssl/cert.pem'  # SSL certificate path
+  ssl_key: 'ssl/key.pem'   # SSL key path
+  username: 'admin'  # Web interface username
+  password_hash: ''  # Web interface password hash (set via script)
+
+# Security settings
+security:
+  encrypt_faces: false  # Encrypt stored face data
+  encryption_key: ''    # Encryption key (set via script)
+  allowed_ips: []      # IP whitelist for web interface
+  session_timeout: 3600  # Web session timeout in seconds
+  max_login_attempts: 5  # Maximum failed login attempts
+  lockout_duration: 300  # Account lockout duration in seconds
+
+# Notification settings
+notifications:
+  enabled: false  # Enable notifications
+  methods:  # Notification methods
+    email:
+      enabled: false
+      smtp_server: 'smtp.gmail.com'
+      smtp_port: 587
+      username: ''
+      password: ''
+      from_address: ''
+      to_addresses: []
+    telegram:
+      enabled: false
+      bot_token: ''
+      chat_ids: []
+    webhook:
+      enabled: false
+      url: ''
+      method: 'POST'
+      headers: {}
+
+# Performance settings
+performance:
+  max_processes: 4  # Maximum number of worker processes
+  batch_size: 32    # Batch size for face detection
+  gpu_enabled: false  # Enable GPU acceleration if available
+  optimize_for: 'balanced'  # 'speed', 'accuracy', or 'balanced'
+
+# Debug settings
+debug:
+  enabled: false  # Enable debug mode
+  save_frames: false  # Save problematic frames for analysis
+  profile_code: false  # Enable code profiling
+  verbose_logging: false  # Enable verbose logging 

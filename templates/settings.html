@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Facial Recognition System{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <h1 class="h2 mb-4">Settings</h1>
+    
+    <form id="settingsForm">
+        <!-- Recognition Settings -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Recognition Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="tolerance" class="form-label">
+                                Face Recognition Tolerance
+                                <i class="fas fa-info-circle" data-bs-toggle="tooltip"
+                                   title="Lower values mean stricter matching (0.4-0.6 recommended)"></i>
+                            </label>
+                            <input type="range" class="form-range" id="tolerance" 
+                                   min="0.3" max="0.8" step="0.05"
+                                   value="{{ config.recognition.tolerance }}">
+                            <div class="text-muted">
+                                Value: <span id="toleranceValue">{{ config.recognition.tolerance }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="model" class="form-label">
+                                Detection Model
+                                <i class="fas fa-info-circle" data-bs-toggle="tooltip"
+                                   title="HOG is faster, CNN is more accurate but requires more processing power"></i>
+                            </label>
+                            <select class="form-select" id="model">
+                                <option value="hog" {% if config.recognition.model == 'hog' %}selected{% endif %}>
+                                    HOG (Faster)
+                                </option>
+                                <option value="cnn" {% if config.recognition.model == 'cnn' %}selected{% endif %}>
+                                    CNN (More Accurate)
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="resolution" class="form-label">Camera Resolution</label>
+                            <select class="form-select" id="resolution">
+                                <option value="[640,480]" {% if config.recognition.resolution == [640,480] %}selected{% endif %}>
+                                    640x480 (Default)
+                                </option>
+                                <option value="[1280,720]" {% if config.recognition.resolution == [1280,720] %}selected{% endif %}>
+                                    1280x720 (HD)
+                                </option>
+                                <option value="[1920,1080]" {% if config.recognition.resolution == [1920,1080] %}selected{% endif %}>
+                                    1920x1080 (Full HD)
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="frameRate" class="form-label">Frame Rate</label>
+                            <input type="number" class="form-control" id="frameRate"
+                                   min="1" max="60" value="{{ config.recognition.frame_rate }}">
+                            <div class="form-text">Frames per second (lower for better performance)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Camera Settings -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Camera Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="cameraType" class="form-label">Camera Type</label>
+                            <select class="form-select" id="cameraType">
+                                <option value="usb" {% if config.camera.type == 'usb' %}selected{% endif %}>
+                                    USB Camera
+                                </option>
+                                <option value="picamera" {% if config.camera.type == 'picamera' %}selected{% endif %}>
+                                    Raspberry Pi Camera
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="cameraDevice" class="form-label">Camera Device</label>
+                            <input type="number" class="form-control" id="cameraDevice"
+                                   min="0" value="{{ config.camera.device }}">
+                            <div class="form-text">Device index (usually 0 for first camera)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="flipHorizontal"
+                                       {% if config.camera.flip_horizontal %}checked{% endif %}>
+                                <label class="form-check-label" for="flipHorizontal">
+                                    Flip Horizontally
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="flipVertical"
+                                       {% if config.camera.flip_vertical %}checked{% endif %}>
+                                <label class="form-check-label" for="flipVertical">
+                                    Flip Vertically
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Greeting Settings -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Greeting Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="greetingEnabled"
+                                       {% if config.greeting.enabled %}checked{% endif %}>
+                                <label class="form-check-label" for="greetingEnabled">
+                                    Enable Voice Greetings
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="greetingCooldown" class="form-label">Greeting Cooldown</label>
+                            <input type="number" class="form-control" id="greetingCooldown"
+                                   min="0" value="{{ config.greeting.cooldown }}">
+                            <div class="form-text">Seconds between greetings for the same person</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="volume" class="form-label">Volume</label>
+                            <input type="range" class="form-range" id="volume"
+                                   min="0" max="1" step="0.1" value="{{ config.greeting.volume }}">
+                            <div class="text-muted">
+                                Value: <span id="volumeValue">{{ config.greeting.volume }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="language" class="form-label">Language</label>
+                            <select class="form-select" id="language">
+                                <option value="en" {% if config.greeting.language == 'en' %}selected{% endif %}>English</option>
+                                <option value="es" {% if config.greeting.language == 'es' %}selected{% endif %}>Spanish</option>
+                                <option value="fr" {% if config.greeting.language == 'fr' %}selected{% endif %}>French</option>
+                                <option value="de" {% if config.greeting.language == 'de' %}selected{% endif %}>German</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Storage Settings -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Storage Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="autoClean"
+                                       {% if config.storage.auto_clean %}checked{% endif %}>
+                                <label class="form-check-label" for="autoClean">
+                                    Auto Clean Unknown Faces
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="maxUnknownAge" class="form-label">Max Unknown Face Age</label>
+                            <input type="number" class="form-control" id="maxUnknownAge"
+                                   min="1" value="{{ config.storage.max_unknown_age }}">
+                            <div class="form-text">Days to keep unknown faces before auto-cleanup</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="backupEnabled"
+                                       {% if config.storage.backup_enabled %}checked{% endif %}>
+                                <label class="form-check-label" for="backupEnabled">
+                                    Enable Automatic Backups
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="backupInterval" class="form-label">Backup Interval</label>
+                            <input type="number" class="form-control" id="backupInterval"
+                                   min="1" value="{{ config.storage.backup_interval }}">
+                            <div class="form-text">Days between automatic backups</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Security Settings -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Security Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="encryptFaces"
+                                       {% if config.security.encrypt_faces %}checked{% endif %}>
+                                <label class="form-check-label" for="encryptFaces">
+                                    Encrypt Stored Face Data
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="sessionTimeout" class="form-label">Session Timeout</label>
+                            <input type="number" class="form-control" id="sessionTimeout"
+                                   min="300" value="{{ config.security.session_timeout }}">
+                            <div class="form-text">Web interface session timeout in seconds</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="maxLoginAttempts" class="form-label">Max Login Attempts</label>
+                            <input type="number" class="form-control" id="maxLoginAttempts"
+                                   min="1" value="{{ config.security.max_login_attempts }}">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="lockoutDuration" class="form-label">Lockout Duration</label>
+                            <input type="number" class="form-control" id="lockoutDuration"
+                                   min="60" value="{{ config.security.lockout_duration }}">
+                            <div class="form-text">Account lockout duration in seconds</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Save Button -->
+        <div class="text-end mb-4">
+            <button type="button" class="btn btn-secondary me-2" id="resetButton">
+                Reset to Defaults
+            </button>
+            <button type="submit" class="btn btn-primary" id="saveButton">
+                <i class="fas fa-save"></i> Save Changes
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Update range input displays
+    $('#tolerance').on('input', function() {
+        $('#toleranceValue').text($(this).val());
+    });
+    
+    $('#volume').on('input', function() {
+        $('#volumeValue').text($(this).val());
+    });
+    
+    // Save settings
+    $('#settingsForm').submit(function(e) {
+        e.preventDefault();
+        
+        const settings = {
+            recognition: {
+                tolerance: parseFloat($('#tolerance').val()),
+                model: $('#model').val(),
+                resolution: JSON.parse($('#resolution').val()),
+                frame_rate: parseInt($('#frameRate').val())
+            },
+            camera: {
+                type: $('#cameraType').val(),
+                device: parseInt($('#cameraDevice').val()),
+                flip_horizontal: $('#flipHorizontal').is(':checked'),
+                flip_vertical: $('#flipVertical').is(':checked')
+            },
+            greeting: {
+                enabled: $('#greetingEnabled').is(':checked'),
+                cooldown: parseInt($('#greetingCooldown').val()),
+                volume: parseFloat($('#volume').val()),
+                language: $('#language').val()
+            },
+            storage: {
+                auto_clean: $('#autoClean').is(':checked'),
+                max_unknown_age: parseInt($('#maxUnknownAge').val()),
+                backup_enabled: $('#backupEnabled').is(':checked'),
+                backup_interval: parseInt($('#backupInterval').val())
+            },
+            security: {
+                encrypt_faces: $('#encryptFaces').is(':checked'),
+                session_timeout: parseInt($('#sessionTimeout').val()),
+                max_login_attempts: parseInt($('#maxLoginAttempts').val()),
+                lockout_duration: parseInt($('#lockoutDuration').val())
+            }
+        };
+        
+        $.ajax({
+            url: '/api/settings',
+            type: 'POST',
+            data: JSON.stringify(settings),
+            contentType: 'application/json',
+            success: function(response) {
+                showAlert('success', 'Settings saved successfully');
+                
+                // Ask to restart if necessary
+                if (response.restart_required) {
+                    if (confirm('Some changes require a system restart. Would you like to restart now?')) {
+                        $.post('/api/system/restart');
+                    }
+                }
+            }
+        });
+    });
+    
+    // Reset to defaults
+    $('#resetButton').click(function() {
+        if (confirm('Are you sure you want to reset all settings to their default values?')) {
+            $.get('/api/settings/defaults', function(defaults) {
+                // Update all form fields with default values
+                $('#tolerance').val(defaults.recognition.tolerance).trigger('input');
+                $('#model').val(defaults.recognition.model);
+                $('#resolution').val(JSON.stringify(defaults.recognition.resolution));
+                $('#frameRate').val(defaults.recognition.frame_rate);
+                
+                $('#cameraType').val(defaults.camera.type);
+                $('#cameraDevice').val(defaults.camera.device);
+                $('#flipHorizontal').prop('checked', defaults.camera.flip_horizontal);
+                $('#flipVertical').prop('checked', defaults.camera.flip_vertical);
+                
+                $('#greetingEnabled').prop('checked', defaults.greeting.enabled);
+                $('#greetingCooldown').val(defaults.greeting.cooldown);
+                $('#volume').val(defaults.greeting.volume).trigger('input');
+                $('#language').val(defaults.greeting.language);
+                
+                $('#autoClean').prop('checked', defaults.storage.auto_clean);
+                $('#maxUnknownAge').val(defaults.storage.max_unknown_age);
+                $('#backupEnabled').prop('checked', defaults.storage.backup_enabled);
+                $('#backupInterval').val(defaults.storage.backup_interval);
+                
+                $('#encryptFaces').prop('checked', defaults.security.encrypt_faces);
+                $('#sessionTimeout').val(defaults.security.session_timeout);
+                $('#maxLoginAttempts').val(defaults.security.max_login_attempts);
+                $('#lockoutDuration').val(defaults.security.lockout_duration);
+                
+                showAlert('info', 'Settings reset to defaults. Click Save Changes to apply.');
+            });
+        }
+    });
+    
+    // Initialize tooltips
+    $('[data-bs-toggle="tooltip"]').tooltip();
+    
+    // Form validation
+    function validateSettings() {
+        const frameRate = parseInt($('#frameRate').val());
+        if (frameRate < 1 || frameRate > 60) {
+            showAlert('danger', 'Frame rate must be between 1 and 60');
+            return false;
+        }
+        
+        const cooldown = parseInt($('#greetingCooldown').val());
+        if (cooldown < 0) {
+            showAlert('danger', 'Greeting cooldown cannot be negative');
+            return false;
+        }
+        
+        const maxAge = parseInt($('#maxUnknownAge').val());
+        if (maxAge < 1) {
+            showAlert('danger', 'Maximum unknown face age must be at least 1 day');
+            return false;
+        }
+        
+        const sessionTimeout = parseInt($('#sessionTimeout').val());
+        if (sessionTimeout < 300) {
+            showAlert('danger', 'Session timeout must be at least 300 seconds');
+            return false;
+        }
+        
+        return true;
+    }
+    
+    $('#settingsForm').on('submit', function(e) {
+        if (!validateSettings()) {
+            e.preventDefault();
+        }
+    });
+</script>
+{% endblock %} 
