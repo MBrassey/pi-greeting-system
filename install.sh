@@ -153,14 +153,85 @@ install_camera_deps() {
     return 0
 }
 
+# Function to verify camera hardware
+verify_camera_hardware() {
+    log "Verifying camera hardware connection..."
+    
+    # Check if camera module is physically detected
+    if ! vcgencmd get_camera | grep -q "detected=1"; then
+        error "Camera hardware not detected by system"
+        error "Please check:"
+        echo "  1. Camera ribbon cable is properly seated at both ends"
+        echo "  2. Cable is oriented correctly (blue side facing away from contacts)"
+        echo "  3. Cable is not damaged"
+        echo "  4. Camera module power connections are good"
+        return 1
+    fi
+    
+    # Give hardware time to initialize
+    log "Camera detected, waiting for hardware initialization..."
+    sleep 5
+    
+    # Check I2C communication
+    local i2c_bus
+    if [ "$PI_MODEL" = "5" ]; then
+        i2c_bus=10
+    else
+        i2c_bus=7
+    fi
+    
+    # Try multiple times to detect camera on I2C
+    local max_attempts=3
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        log "Checking camera I2C communication (attempt $attempt/$max_attempts)..."
+        if i2cdetect -y $i2c_bus | grep -q "1a\|36"; then
+            info "Camera I2C communication verified"
+            return 0
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    
+    error "Failed to establish I2C communication with camera"
+    error "This might indicate a power issue or damaged module"
+    return 1
+}
+
 # Function to configure camera
 configure_camera() {
     log "Configuring camera system..."
+    
+    # First verify camera hardware
+    if ! verify_camera_hardware; then
+        return 1
+    fi
     
     # Backup config.txt if it hasn't been backed up in this session
     if [ ! -f "/boot/config.txt.backup" ]; then
         sudo cp /boot/config.txt /boot/config.txt.backup
     fi
+    
+    # Remove any existing camera configuration
+    sudo sed -i '/^start_x=/d' /boot/config.txt
+    sudo sed -i '/^camera_auto_detect=/d' /boot/config.txt
+    sudo sed -i '/^dtoverlay=imx519/d' /boot/config.txt
+    sudo sed -i '/^gpu_mem=/d' /boot/config.txt
+    sudo sed -i '/^dtparam=i2c_arm=/d' /boot/config.txt
+    sudo sed -i '/^dtparam=i2c_vc=/d' /boot/config.txt
+    
+    # Add fresh configuration
+    log "Adding camera configuration..."
+    {
+        echo ""
+        echo "# Camera configuration"
+        echo "start_x=1"
+        echo "camera_auto_detect=1"
+        echo "dtoverlay=imx519"
+        echo "gpu_mem=256"
+        echo "dtparam=i2c_arm=on"
+        echo "dtparam=i2c_vc=on"
+    } | sudo tee -a /boot/config.txt
     
     # Enable interfaces
     log "Enabling required interfaces..."
@@ -169,27 +240,18 @@ configure_camera() {
         sudo raspi-config nonint do_i2c 0
     fi
     
-    # Update boot configuration
-    log "Updating boot configuration..."
-    {
-        echo "# Camera configuration"
-        echo "start_x=1"
-        echo "camera_auto_detect=1"
-        echo "dtoverlay=imx519"
-        echo "gpu_mem=256"
-    } | sudo tee /boot/camera.conf
-
-    # Merge configurations, avoiding duplicates
-    sudo sed -i '/^start_x=/d' /boot/config.txt
-    sudo sed -i '/^camera_auto_detect=/d' /boot/config.txt
-    sudo sed -i '/^dtoverlay=imx519/d' /boot/config.txt
-    sudo sed -i '/^gpu_mem=/d' /boot/config.txt
-    
-    cat /boot/camera.conf | sudo tee -a /boot/config.txt
-    sudo rm /boot/camera.conf
-    
     # Set up camera tuning
     setup_camera_tuning
+    
+    # Force reload camera module
+    log "Reloading camera module..."
+    sudo rmmod v4l2_common || true
+    sudo rmmod bcm2835_v4l2 || true
+    sudo rmmod videobuf2_common || true
+    sudo modprobe bcm2835_v4l2
+    sleep 2
+    
+    return 0
 }
 
 # Function to set up camera tuning
@@ -235,6 +297,23 @@ EOF
 test_camera() {
     log "Testing camera configuration..."
     
+    # Wait for camera device
+    log "Waiting for camera device initialization..."
+    local timeout=10
+    local count=0
+    while [ $count -lt $timeout ]; do
+        if [ -e "/dev/video0" ]; then
+            break
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    if [ ! -e "/dev/video0" ]; then
+        error "Camera device not found after waiting"
+        return 1
+    fi
+    
     # Create test script
     local test_script="/tmp/test_camera.py"
     cat > "$test_script" << 'EOF'
@@ -245,7 +324,20 @@ import sys
 
 def test_camera():
     try:
+        # Initialize with longer timeout
         picam2 = Picamera2()
+        time.sleep(2)  # Wait for initialization
+        
+        # Get camera info first
+        camera_info = {
+            "model": picam2.camera.id,
+            "modes": picam2.camera.modes
+        }
+        
+        # Log camera info
+        print("Camera Info:", file=sys.stderr)
+        print(f"Model: {camera_info['model']}", file=sys.stderr)
+        print(f"Available Modes: {len(camera_info['modes'])}", file=sys.stderr)
         
         # Test configuration
         config = picam2.create_still_configuration(
@@ -255,27 +347,20 @@ def test_camera():
         )
         picam2.configure(config)
         
-        # Start camera
+        # Start camera with timeout
         picam2.start()
-        time.sleep(2)
+        time.sleep(3)  # Extended warm-up
         
-        # Capture test image
+        # Try to capture
         picam2.capture_file("camera_test_full.jpg")
-        
-        # Get camera info
-        camera_info = {
-            "model": picam2.camera.id,
-            "resolution": config["main"]["size"],
-            "modes": picam2.camera.modes
-        }
+        picam2.close()
         
         with open("camera_info.json", "w") as f:
             json.dump(camera_info, f, indent=2)
         
-        picam2.close()
         return True
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"Camera Test Error: {str(e)}", file=sys.stderr)
         return False
 
 if __name__ == "__main__":
@@ -283,9 +368,19 @@ if __name__ == "__main__":
     sys.exit(0 if success else 1)
 EOF
     
-    # Run test
-    if ! python3 "$test_script"; then
+    # Run test with debug output
+    log "Running camera test..."
+    export LIBCAMERA_LOG_LEVELS=0
+    if ! python3 "$test_script" 2>&1; then
         error "Camera test failed"
+        # Try to gather diagnostic information
+        log "Gathering diagnostic information..."
+        echo "I2C Devices:"
+        i2cdetect -y 7 || i2cdetect -y 10 || true
+        echo "Video Devices:"
+        ls -l /dev/video* || true
+        echo "dmesg output:"
+        dmesg | grep -i "camera\|v4l\|video" | tail -n 20 || true
         rm -f "$test_script"
         return 1
     fi
