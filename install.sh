@@ -198,99 +198,224 @@ verify_camera_hardware() {
     return 1
 }
 
+# Function to detect camera type
+detect_camera_type() {
+    log "Detecting camera type..."
+    
+    # Check for USB cameras first
+    if ls /dev/video* >/dev/null 2>&1; then
+        if v4l2-ctl --list-devices 2>/dev/null | grep -q "uvcvideo"; then
+            info "USB webcam detected"
+            export CAMERA_TYPE="usb"
+            export CAMERA_DEV=$(v4l2-ctl --list-devices 2>/dev/null | grep -A1 "uvcvideo" | grep "/dev/video" | head -n1 | xargs)
+            return 0
+        fi
+    fi
+    
+    # Check for Pi Camera
+    if vcgencmd get_camera | grep -q "detected=1"; then
+        # Check I2C for IMX519
+        local i2c_bus
+        if [ "$PI_MODEL" = "5" ]; then
+            i2c_bus=10
+        else
+            i2c_bus=7
+        fi
+        
+        if i2cdetect -y $i2c_bus 2>/dev/null | grep -q "1a\|36"; then
+            info "Arducam IMX519 camera detected"
+            export CAMERA_TYPE="imx519"
+        else
+            info "Raspberry Pi camera detected"
+            export CAMERA_TYPE="picamera"
+        fi
+        return 0
+    fi
+    
+    error "No camera detected"
+    return 1
+}
+
+# Function to test USB camera
+test_usb_camera() {
+    local device=$1
+    log "Testing USB camera on $device..."
+    
+    # Create test script for USB camera
+    local test_script="/tmp/test_usb_camera.py"
+    cat > "$test_script" << 'EOF'
+import cv2
+import sys
+import json
+
+def test_camera():
+    try:
+        # Try to open the camera
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            raise Exception("Could not open camera")
+        
+        # Get camera info
+        width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        camera_info = {
+            "type": "USB",
+            "resolution": f"{int(width)}x{int(height)}",
+            "fps": fps
+        }
+        
+        # Try to read a frame
+        ret, frame = cap.read()
+        if not ret:
+            raise Exception("Could not read frame")
+        
+        # Save test image
+        cv2.imwrite('camera_test_initial.jpg', frame)
+        
+        # Save camera info
+        with open('camera_info.json', 'w') as f:
+            json.dump(camera_info, f, indent=2)
+        
+        # Release camera
+        cap.release()
+        return True
+        
+    except Exception as e:
+        print(f"Camera Test Error: {str(e)}", file=sys.stderr)
+        return False
+
+if __name__ == "__main__":
+    success = test_camera()
+    sys.exit(0 if success else 1)
+EOF
+    
+    # Run USB camera test
+    if ! python3 "$test_script"; then
+        error "USB camera test failed"
+        rm -f "$test_script"
+        return 1
+    fi
+    
+    rm -f "$test_script"
+    return 0
+}
+
+# Function to test Pi Camera
+test_pi_camera() {
+    log "Testing Pi Camera..."
+    
+    # Create test script for Pi Camera
+    local test_script="/tmp/test_pi_camera.py"
+    cat > "$test_script" << 'EOF'
+from picamera2 import Picamera2
+import time
+import json
+import sys
+
+def test_camera():
+    try:
+        picam2 = Picamera2()
+        
+        # Get camera info
+        camera_info = {
+            "type": "Pi Camera",
+            "model": picam2.camera.id,
+            "modes": picam2.camera.modes
+        }
+        
+        # Configure camera
+        config = picam2.create_still_configuration()
+        picam2.configure(config)
+        
+        # Start camera with timeout
+        picam2.start()
+        time.sleep(2)
+        
+        # Capture test image
+        picam2.capture_file("camera_test_initial.jpg")
+        picam2.close()
+        
+        # Save camera info
+        with open("camera_info.json", "w") as f:
+            json.dump(camera_info, f, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Camera Test Error: {str(e)}", file=sys.stderr)
+        return False
+
+if __name__ == "__main__":
+    success = test_camera()
+    sys.exit(0 if success else 1)
+EOF
+    
+    # Run Pi camera test
+    if ! python3 "$test_script"; then
+        error "Pi camera test failed"
+        rm -f "$test_script"
+        return 1
+    fi
+    
+    rm -f "$test_script"
+    return 0
+}
+
 # Function to configure camera
 configure_camera() {
     log "Configuring camera system..."
     
-    # First verify camera hardware
-    if ! verify_camera_hardware; then
+    # Detect camera type first
+    if ! detect_camera_type; then
+        error "No camera detected"
         return 1
     fi
     
-    # Backup config.txt if it hasn't been backed up in this session
-    if [ ! -f "/boot/config.txt.backup" ]; then
-        sudo cp /boot/config.txt /boot/config.txt.backup
-    fi
-    
-    # Remove any existing camera configuration
-    sudo sed -i '/^start_x=/d' /boot/config.txt
-    sudo sed -i '/^camera_auto_detect=/d' /boot/config.txt
-    sudo sed -i '/^dtoverlay=imx519/d' /boot/config.txt
-    sudo sed -i '/^gpu_mem=/d' /boot/config.txt
-    sudo sed -i '/^dtparam=i2c_arm=/d' /boot/config.txt
-    sudo sed -i '/^dtparam=i2c_vc=/d' /boot/config.txt
-    
-    # Add fresh configuration
-    log "Adding camera configuration..."
-    {
-        echo ""
-        echo "# Camera configuration"
-        echo "start_x=1"
-        echo "camera_auto_detect=1"
-        echo "dtoverlay=imx519"
-        echo "gpu_mem=256"
-        echo "dtparam=i2c_arm=on"
-        echo "dtparam=i2c_vc=on"
-    } | sudo tee -a /boot/config.txt
-    
-    # Enable interfaces
-    log "Enabling required interfaces..."
-    if command -v raspi-config >/dev/null 2>&1; then
-        sudo raspi-config nonint do_camera 0
-        sudo raspi-config nonint do_i2c 0
-    fi
-    
-    # Set up camera tuning
-    setup_camera_tuning
-    
-    # Force reload camera module
-    log "Reloading camera module..."
-    sudo rmmod v4l2_common || true
-    sudo rmmod bcm2835_v4l2 || true
-    sudo rmmod videobuf2_common || true
-    sudo modprobe bcm2835_v4l2
-    sleep 2
+    case $CAMERA_TYPE in
+        "usb")
+            log "Configuring USB camera..."
+            # Install USB camera dependencies
+            sudo apt-get install -y v4l-utils guvcview || true
+            ;;
+            
+        "imx519"|"picamera")
+            log "Configuring Pi Camera..."
+            # Backup config.txt
+            if [ ! -f "/boot/config.txt.backup" ]; then
+                sudo cp /boot/config.txt /boot/config.txt.backup
+            fi
+            
+            # Remove existing camera config
+            sudo sed -i '/^start_x=/d' /boot/config.txt
+            sudo sed -i '/^camera_auto_detect=/d' /boot/config.txt
+            sudo sed -i '/^dtoverlay=imx519/d' /boot/config.txt
+            sudo sed -i '/^gpu_mem=/d' /boot/config.txt
+            sudo sed -i '/^dtparam=i2c_arm=/d' /boot/config.txt
+            
+            # Add new camera config
+            {
+                echo ""
+                echo "# Camera configuration"
+                echo "start_x=1"
+                echo "camera_auto_detect=1"
+                [ "$CAMERA_TYPE" = "imx519" ] && echo "dtoverlay=imx519"
+                echo "gpu_mem=256"
+                echo "dtparam=i2c_arm=on"
+            } | sudo tee -a /boot/config.txt
+            
+            # Enable interfaces
+            if command -v raspi-config >/dev/null 2>&1; then
+                sudo raspi-config nonint do_camera 0
+                sudo raspi-config nonint do_i2c 0
+            fi
+            
+            # Setup camera tuning if needed
+            [ "$CAMERA_TYPE" = "imx519" ] && setup_camera_tuning
+            ;;
+    esac
     
     return 0
-}
-
-# Function to set up camera tuning
-setup_camera_tuning() {
-    log "Setting up camera tuning..."
-    
-    sudo mkdir -p /usr/share/libcamera/ipa/raspberrypi
-    
-    # Only create tuning file if it doesn't exist or is different
-    local tuning_file="/usr/share/libcamera/ipa/raspberrypi/imx519.json"
-    local temp_file=$(mktemp)
-    
-    cat > "$temp_file" << 'EOF'
-{
-    "version": 1.0,
-    "target": "bcm2835-isp",
-    "algorithms": {
-        "rpi.agc": {
-            "exposure_modes": {
-                "normal": { "shutter": [100, 66666], "gain": [1.0, 8.0] }
-            },
-            "exposure_mode": "normal"
-        },
-        "rpi.awb": {
-            "bayes": 1,
-            "ct_curve": [
-                {"x": 2500, "y": 1.2},
-                {"x": 6500, "y": 1.0}
-            ]
-        }
-    }
-}
-EOF
-    
-    if [ ! -f "$tuning_file" ] || ! cmp -s "$temp_file" "$tuning_file"; then
-        sudo cp "$temp_file" "$tuning_file"
-    fi
-    
-    rm "$temp_file"
 }
 
 # Function to test camera
@@ -314,90 +439,29 @@ test_camera() {
         return 1
     fi
     
-    # Create test script
-    local test_script="/tmp/test_camera.py"
-    cat > "$test_script" << 'EOF'
-from picamera2 import Picamera2
-import time
-import json
-import sys
-
-def test_camera():
-    try:
-        # Initialize with longer timeout
-        picam2 = Picamera2()
-        time.sleep(2)  # Wait for initialization
-        
-        # Get camera info first
-        camera_info = {
-            "model": picam2.camera.id,
-            "modes": picam2.camera.modes
-        }
-        
-        # Log camera info
-        print("Camera Info:", file=sys.stderr)
-        print(f"Model: {camera_info['model']}", file=sys.stderr)
-        print(f"Available Modes: {len(camera_info['modes'])}", file=sys.stderr)
-        
-        # Test configuration
-        config = picam2.create_still_configuration(
-            main={"size": (4656, 3496)},
-            lores={"size": (1920, 1080)},
-            display="lores"
-        )
-        picam2.configure(config)
-        
-        # Start camera with timeout
-        picam2.start()
-        time.sleep(3)  # Extended warm-up
-        
-        # Try to capture
-        picam2.capture_file("camera_test_full.jpg")
-        picam2.close()
-        
-        with open("camera_info.json", "w") as f:
-            json.dump(camera_info, f, indent=2)
-        
-        return True
-    except Exception as e:
-        print(f"Camera Test Error: {str(e)}", file=sys.stderr)
-        return False
-
-if __name__ == "__main__":
-    success = test_camera()
-    sys.exit(0 if success else 1)
-EOF
+    # Test based on camera type
+    case $CAMERA_TYPE in
+        "usb")
+            test_usb_camera "/dev/video0"
+            ;;
+        "imx519"|"picamera")
+            test_pi_camera
+            ;;
+    esac
     
-    # Run test with debug output
-    log "Running camera test..."
-    export LIBCAMERA_LOG_LEVELS=0
-    if ! python3 "$test_script" 2>&1; then
-        error "Camera test failed"
-        # Try to gather diagnostic information
-        log "Gathering diagnostic information..."
-        echo "I2C Devices:"
-        i2cdetect -y 7 || i2cdetect -y 10 || true
-        echo "Video Devices:"
-        ls -l /dev/video* || true
-        echo "dmesg output:"
-        dmesg | grep -i "camera\|v4l\|video" | tail -n 20 || true
-        rm -f "$test_script"
+    # Verify test results
+    if [ ! -f "camera_test_initial.jpg" ]; then
+        error "Camera test failed - no test image captured"
         return 1
     fi
     
-    # Verify results
-    if [ ! -f "camera_test_full.jpg" ]; then
-        error "Test image capture failed"
-        rm -f "$test_script"
-        return 1
+    if [ -f "camera_info.json" ]; then
+        info "Camera test successful"
+        info "Test image saved as: camera_test_initial.jpg"
+        echo "Camera information:"
+        cat camera_info.json
     fi
     
-    # Cleanup
-    rm -f "$test_script"
-    mv camera_test_full.jpg camera_test_initial.jpg
-    
-    info "Camera test successful"
-    info "Test image saved as: camera_test_initial.jpg"
     return 0
 }
 
