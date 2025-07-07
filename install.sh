@@ -202,37 +202,84 @@ verify_camera_hardware() {
 detect_camera_type() {
     log "Detecting camera type..."
     
-    # Check for USB cameras first
-    if ls /dev/video* >/dev/null 2>&1; then
-        if v4l2-ctl --list-devices 2>/dev/null | grep -q "uvcvideo"; then
-            info "USB webcam detected"
-            export CAMERA_TYPE="usb"
-            export CAMERA_DEV=$(v4l2-ctl --list-devices 2>/dev/null | grep -A1 "uvcvideo" | grep "/dev/video" | head -n1 | xargs)
-            return 0
-        fi
-    fi
+    # Force USB camera detection with multiple retries
+    local max_attempts=5
+    local attempt=1
     
-    # Check for Pi Camera
-    if vcgencmd get_camera | grep -q "detected=1"; then
-        # Check I2C for IMX519
-        local i2c_bus
-        if [ "$PI_MODEL" = "5" ]; then
-            i2c_bus=10
-        else
-            i2c_bus=7
+    while [ $attempt -le $max_attempts ]; do
+        log "USB camera detection attempt $attempt/$max_attempts..."
+        
+        # Ensure USB video module is loaded
+        if ! lsmod | grep -q "uvcvideo"; then
+            log "Loading USB video driver..."
+            sudo modprobe uvcvideo
+            sleep 2
         fi
         
-        if i2cdetect -y $i2c_bus 2>/dev/null | grep -q "1a\|36"; then
-            info "Arducam IMX519 camera detected"
-            export CAMERA_TYPE="imx519"
-        else
-            info "Raspberry Pi camera detected"
-            export CAMERA_TYPE="picamera"
+        # Force device node permissions
+        for dev in /dev/video*; do
+            if [ -e "$dev" ]; then
+                sudo chmod 666 "$dev"
+            fi
+        done
+        
+        # Check using multiple methods
+        local usb_camera_found=0
+        
+        # Method 1: Direct device check
+        if [ -e "/dev/video0" ] || [ -e "/dev/video1" ]; then
+            usb_camera_found=1
+            export CAMERA_DEV="/dev/video0"
         fi
-        return 0
-    fi
+        
+        # Method 2: V4L2 check
+        if v4l2-ctl --list-devices 2>/dev/null | grep -q "video"; then
+            usb_camera_found=1
+            export CAMERA_DEV=$(v4l2-ctl --list-devices 2>/dev/null | grep "/dev/video" | head -n1 | xargs)
+        fi
+        
+        # Method 3: USB device check
+        if lsusb | grep -qi "camera\|webcam\|uvc"; then
+            usb_camera_found=1
+            # Find corresponding video device if not already found
+            if [ -z "$CAMERA_DEV" ]; then
+                export CAMERA_DEV=$(ls /dev/video* | head -n1)
+            fi
+        fi
+        
+        if [ $usb_camera_found -eq 1 ]; then
+            info "USB webcam detected"
+            export CAMERA_TYPE="usb"
+            info "Using camera device: $CAMERA_DEV"
+            return 0
+        fi
+        
+        log "Camera not detected, retrying after system adjustments..."
+        
+        # Try to fix common issues
+        sudo rmmod uvcvideo || true
+        sudo rmmod videobuf2_core || true
+        sleep 1
+        sudo modprobe uvcvideo
+        sudo modprobe videobuf2_core
+        sleep 2
+        
+        attempt=$((attempt + 1))
+    done
     
-    error "No camera detected"
+    error "Could not detect USB camera after $max_attempts attempts"
+    # Print diagnostic information
+    log "=== Diagnostic Information ==="
+    echo "USB Devices:"
+    lsusb
+    echo -e "\nVideo Devices:"
+    ls -l /dev/video* 2>/dev/null || echo "No video devices found"
+    echo -e "\nLoaded Modules:"
+    lsmod | grep -E "uvcvideo|videobuf|videodev"
+    echo -e "\nV4L2 Devices:"
+    v4l2-ctl --list-devices 2>/dev/null
+    echo -e "\nSystem Messages:"
+    dmesg | grep -i "uvc\|video\|camera" | tail -n 20
     return 1
 }
 
@@ -241,65 +288,128 @@ test_usb_camera() {
     local device=$1
     log "Testing USB camera on $device..."
     
+    # Ensure OpenCV is installed
+    if ! python3 -c "import cv2" 2>/dev/null; then
+        log "Installing OpenCV..."
+        sudo apt-get update
+        sudo apt-get install -y python3-opencv
+    fi
+    
     # Create test script for USB camera
     local test_script="/tmp/test_usb_camera.py"
     cat > "$test_script" << 'EOF'
 import cv2
 import sys
 import json
+import time
+import os
 
 def test_camera():
-    try:
-        # Try to open the camera
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            raise Exception("Could not open camera")
-        
-        # Get camera info
-        width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        
-        camera_info = {
-            "type": "USB",
-            "resolution": f"{int(width)}x{int(height)}",
-            "fps": fps
-        }
-        
-        # Try to read a frame
-        ret, frame = cap.read()
-        if not ret:
-            raise Exception("Could not read frame")
-        
-        # Save test image
-        cv2.imwrite('camera_test_initial.jpg', frame)
-        
-        # Save camera info
-        with open('camera_info.json', 'w') as f:
-            json.dump(camera_info, f, indent=2)
-        
-        # Release camera
-        cap.release()
-        return True
-        
-    except Exception as e:
-        print(f"Camera Test Error: {str(e)}", file=sys.stderr)
-        return False
+    success = False
+    last_error = None
+    
+    # Try different methods and indices
+    methods = [
+        lambda idx: cv2.VideoCapture(idx),  # Index-based
+        lambda idx: cv2.VideoCapture(f"/dev/video{idx}"),  # Direct device
+        lambda idx: cv2.VideoCapture(f"v4l2:///dev/video{idx}")  # V4L2 explicit
+    ]
+    
+    for method in methods:
+        for idx in range(10):  # Try indices 0-9
+            try:
+                print(f"Trying camera method {methods.index(method)+1}/3, index {idx}", file=sys.stderr)
+                cap = method(idx)
+                
+                if not cap.isOpened():
+                    continue
+                
+                # Try multiple times to get a frame
+                for attempt in range(10):
+                    ret, frame = cap.read()
+                    if ret and frame is not None and frame.size > 0:
+                        # Get camera info
+                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        
+                        # Save test image
+                        cv2.imwrite('camera_test_initial.jpg', frame)
+                        
+                        # Save camera info
+                        camera_info = {
+                            "type": "USB",
+                            "index": idx,
+                            "method": methods.index(method) + 1,
+                            "resolution": f"{width}x{height}",
+                            "fps": fps,
+                            "device": f"/dev/video{idx}",
+                            "attempts_needed": attempt + 1
+                        }
+                        
+                        with open('camera_info.json', 'w') as f:
+                            json.dump(camera_info, f, indent=2)
+                        
+                        cap.release()
+                        print(f"Successfully captured image using method {methods.index(method)+1}, index {idx}", file=sys.stderr)
+                        return True
+                    
+                    time.sleep(0.5)  # Wait between attempts
+                cap.release()
+                
+            except Exception as e:
+                last_error = str(e)
+                continue
+    
+    if last_error:
+        print(f"All attempts failed. Last error: {last_error}", file=sys.stderr)
+    return False
 
 if __name__ == "__main__":
-    success = test_camera()
-    sys.exit(0 if success else 1)
+    # Try multiple times
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        print(f"Camera test attempt {attempt + 1}/{max_attempts}", file=sys.stderr)
+        if test_camera():
+            sys.exit(0)
+        time.sleep(1)
+    sys.exit(1)
 EOF
     
-    # Run USB camera test
-    if ! python3 "$test_script"; then
-        error "USB camera test failed"
-        rm -f "$test_script"
-        return 1
-    fi
+    # Make multiple attempts to test the camera
+    local max_attempts=3
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        log "Camera test attempt $attempt/$max_attempts..."
+        
+        # Ensure device permissions
+        sudo chmod 666 "$device"
+        
+        # Run test with debug output
+        if python3 "$test_script" 2>&1; then
+            info "Camera test successful!"
+            rm -f "$test_script"
+            return 0
+        fi
+        
+        log "Test failed, retrying after adjustments..."
+        
+        # Try to fix common issues
+        sudo v4l2-ctl --device="$device" --all >/dev/null 2>&1 || true
+        sleep 2
+        
+        attempt=$((attempt + 1))
+    done
+    
+    error "Camera test failed after $max_attempts attempts"
+    # Show device information
+    log "=== Device Information ==="
+    v4l2-ctl --device="$device" --all || true
+    v4l2-ctl --device="$device" --list-formats-ext || true
     
     rm -f "$test_script"
-    return 0
+    return 1
 }
 
 # Function to test Pi Camera
