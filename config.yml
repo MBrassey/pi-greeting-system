@@ -6,9 +6,9 @@ recognition:
   tolerance: 0.6  # Lower = stricter matching (0.4-0.6 recommended)
   model: 'hog'    # 'hog' (faster) or 'cnn' (more accurate)
   frame_rate: 30  # Frames per second to process
-  resolution: [640, 480]  # Camera resolution [width, height]
-  min_face_size: 20  # Minimum face size in pixels
-  blur_threshold: 100  # Minimum blur threshold (lower = more strict)
+  resolution: [1920, 1080]  # Camera resolution [width, height] - optimized for IMX519
+  min_face_size: 30  # Minimum face size in pixels
+  blur_threshold: 150  # Minimum blur threshold (lower = more strict)
 
 # Camera settings
 camera:
@@ -17,7 +17,9 @@ camera:
   flip_horizontal: false  # Flip camera horizontally
   flip_vertical: false   # Flip camera vertically
   brightness: 50  # Camera brightness (0-100)
-  contrast: 50    # Camera contrast (0-100)
+  contrast: 55    # Camera contrast (0-100)
+  tuning: 'imx519'  # Camera tuning file for IMX519
+  sensor_mode: 2  # Sensor mode for optimal quality/performance balance
 
 # Audio and greeting settings
 greeting:
