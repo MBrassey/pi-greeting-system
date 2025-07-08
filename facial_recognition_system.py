@@ -134,12 +134,55 @@ class FacialRecognitionSystem:
         """Initialize text-to-speech synthesis engine"""
         try:
             self.logger.info("Initializing audio system...")
+            
+            # Try to set default audio device to Bluetooth
+            try:
+                import subprocess
+                
+                # Get list of audio devices
+                devices = subprocess.check_output(['pactl', 'list', 'short', 'sinks']).decode().strip().split('\n')
+                print("\nAvailable audio devices:")
+                for device in devices:
+                    print(device)
+                
+                # Look for Bluetooth device
+                bluetooth_device = None
+                for device in devices:
+                    if 'bluetooth' in device.lower():
+                        bluetooth_device = device.split('\t')[0]
+                        break
+                
+                if bluetooth_device:
+                    # Set as default audio device
+                    subprocess.run(['pactl', 'set-default-sink', bluetooth_device])
+                    print(f"\nSet audio output to Bluetooth device: {bluetooth_device}")
+                else:
+                    print("\nNo Bluetooth audio device found, using default audio output")
+            except Exception as e:
+                print(f"\nCould not set Bluetooth audio device: {e}")
+                print("Using default audio output")
+            
+            # Initialize text-to-speech
             self.tts_engine = pyttsx3.init()
             self.tts_engine.setProperty('rate', 150)  # Default rate
             self.tts_engine.setProperty('volume', 1.0)  # Full volume
             
+            # Get available voices
+            voices = self.tts_engine.getProperty('voices')
+            print("\nAvailable voices:")
+            for voice in voices:
+                print(f"- {voice.name} ({voice.id})")
+            
+            # Try to set a better voice if available
+            for voice in voices:
+                if "english" in voice.name.lower():
+                    self.tts_engine.setProperty('voice', voice.id)
+                    print(f"\nSet voice to: {voice.name}")
+                    break
+            
             # Test audio
-            self.tts_engine.say("Audio system initialized")
+            print("\nTesting audio output...")
+            self.tts_engine.say("Audio system initialized. Testing Bluetooth output.")
             self.tts_engine.runAndWait()
             
             self.tts_queue = queue.Queue()
@@ -150,9 +193,17 @@ class FacialRecognitionSystem:
             self.tts_thread.start()
             self.logger.info("Audio system initialized")
             print("Audio system ready - you should have heard a test message")
+            
+            # Print current audio settings
+            print("\nCurrent audio settings:")
+            print(f"Rate: {self.tts_engine.getProperty('rate')}")
+            print(f"Volume: {self.tts_engine.getProperty('volume')}")
+            print(f"Voice: {self.tts_engine.getProperty('voice')}")
+            
         except Exception as e:
             self.logger.error(f"Failed to initialize audio: {e}")
             print("WARNING: Audio system failed to initialize - no speech output available")
+            print(f"Error details: {str(e)}")
             self.config['greeting']['enabled'] = False
     
     def setup_face_recognition(self):
@@ -222,6 +273,8 @@ class FacialRecognitionSystem:
             try:
                 message = self.tts_queue.get(timeout=1)
                 if message and hasattr(self, 'tts_engine'):
+                    # Ensure we're at full volume for each message
+                    self.tts_engine.setProperty('volume', 1.0)
                     self.tts_engine.say(message)
                     self.tts_engine.runAndWait()
                 self.tts_queue.task_done()
@@ -229,16 +282,17 @@ class FacialRecognitionSystem:
                 continue
             except Exception as e:
                 self.logger.error(f"TTS Error: {e}")
-                print(f"Speech failed: {e}")  # Debug output
+                print(f"Speech failed: {str(e)}")
     
     def speak_async(self, message):
         """Add message to TTS queue"""
         try:
             if hasattr(self, 'tts_queue'):
                 self.tts_queue.put(message)
-                print(f"Speaking: {message}")  # Debug output
+                print(f"Speaking: {message}")
         except Exception as e:
             self.logger.error(f"Failed to queue speech: {e}")
+            print(f"Speech error: {str(e)}")
     
     def get_frame(self):
         """Get frame from camera with error recovery"""
@@ -465,6 +519,7 @@ class FacialRecognitionSystem:
         print("  'q' - Quit")
         print("  'r' - Reload known faces")
         print("  's' - Toggle performance stats")
+        print("  'v' - Toggle voice output")
         print("\nFace Management:")
         print("- Known faces are loaded from: data/known_faces/")
         print("- Unknown faces are saved to: data/unknown_faces/")
@@ -515,6 +570,12 @@ class FacialRecognitionSystem:
                     print("\nWaiting for faces...")
                 elif key == ord('s'):
                     self.show_stats = not self.show_stats
+                elif key == ord('v'):
+                    self.config['greeting']['enabled'] = not self.config['greeting']['enabled']
+                    status = "enabled" if self.config['greeting']['enabled'] else "disabled"
+                    print(f"\nVoice output {status}")
+                    if self.config['greeting']['enabled']:
+                        self.speak_async("Voice output enabled")
                 
             except Exception as e:
                 self.logger.error(f"Error in main loop: {e}")
