@@ -95,44 +95,39 @@ class FacialRecognitionSystem:
             setattr(self, dir_name, dir_path)
     
     def setup_camera(self):
-        """Initialize camera with proper USB webcam device"""
-        # Try both video0 and video1 for USB webcam
-        usb_devices = ['/dev/video0', '/dev/video1']
+        """Initialize camera with USB webcam device"""
+        device = '/dev/video0'  # Default to first USB camera
         
-        for device in usb_devices:
-            try:
-                self.logger.info(f"Trying USB camera device: {device}")
-                self.camera = cv2.VideoCapture(device)
-                if self.camera.isOpened():
-                    # Test frame capture
-                    ret, frame = self.camera.read()
-                    if ret and frame is not None:
-                        self.logger.info(f"Successfully opened camera on {device}")
-                        # Set camera properties
-                        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['recognition']['resolution'][0])
-                        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['recognition']['resolution'][1])
-                        self.camera.set(cv2.CAP_PROP_FPS, self.config['recognition']['frame_rate'])
-                        self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
-                        self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-                        
-                        # Create window
-                        cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
-                        cv2.moveWindow('Facial Recognition System', 0, 0)
-                        return
-                    else:
-                        self.logger.warning(f"Could not read frame from {device}")
-                        self.camera.release()
+        try:
+            self.logger.info(f"Opening USB camera on {device}")
+            self.camera = cv2.VideoCapture(device)
+            if self.camera.isOpened():
+                # Test frame capture
+                ret, frame = self.camera.read()
+                if ret and frame is not None:
+                    self.logger.info("Successfully opened camera")
+                    # Set camera properties
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['recognition']['resolution'][0])
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['recognition']['resolution'][1])
+                    self.camera.set(cv2.CAP_PROP_FPS, self.config['recognition']['frame_rate'])
+                    self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+                    self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                    
+                    # Create window
+                    cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
+                    cv2.moveWindow('Facial Recognition System', 0, 0)
+                    return
                 else:
-                    self.logger.warning(f"Could not open {device}")
-            except Exception as e:
-                self.logger.error(f"Error trying {device}: {str(e)}")
-                if hasattr(self, 'camera'):
+                    self.logger.error("Could not read frame from camera")
                     self.camera.release()
+            else:
+                self.logger.error("Could not open camera")
+        except Exception as e:
+            self.logger.error(f"Error initializing camera: {str(e)}")
+            if hasattr(self, 'camera'):
+                self.camera.release()
         
-        # If we get here, no camera worked
-        self.logger.error("Could not initialize any camera!")
-        self.logger.error("Available devices:")
-        os.system("ls -l /dev/video*")
+        self.logger.error("Could not initialize camera!")
         sys.exit(1)
     
     def setup_audio(self):
@@ -325,6 +320,9 @@ class FacialRecognitionSystem:
         current_time = time.time()
         last_greeting = self.last_greeting_time.get(name, 0)
         
+        # Always print when we see a known face
+        print(f"\nRecognized: {name}")
+        
         if current_time - last_greeting > self.config['greeting']['cooldown']:
             self.last_greeting_time[name] = current_time
             
@@ -335,13 +333,15 @@ class FacialRecognitionSystem:
             )
             
             self.logger.info(f"Greeting {name}")
-            self.speak_async(greeting)
+            # Print greeting to terminal
+            print(f"{greeting}")
+            
+            # Audio greeting if enabled
+            if self.config['greeting']['enabled']:
+                self.speak_async(greeting)
     
     def handle_unknown_face(self, face_encoding, face_location, frame):
         """Handle unknown face detection"""
-        if not self.config['storage']['auto_clean']:
-            return
-        
         face_key = str(face_location)
         if face_key not in self.unknown_face_counters:
             self.unknown_face_counters[face_key] = 0
@@ -350,11 +350,15 @@ class FacialRecognitionSystem:
         
         # Save unknown face after threshold
         if self.unknown_face_counters[face_key] >= 10:
-            self.save_unknown_face(frame, face_location, face_encoding)
+            face_id = self.save_unknown_face(frame, face_location, face_encoding)
             self.unknown_face_counters[face_key] = -1000  # Prevent multiple saves
+            print(f"\nNew face detected! ID: {face_id}")
+            print("To name this face, save a photo of the person as their name in the data/known_faces directory")
+            print("For example: data/known_faces/John.jpg")
+            print("Then press 'r' to reload the known faces\n")
     
     def save_unknown_face(self, frame, face_location, face_encoding):
-        """Save unknown face"""
+        """Save unknown face and return face_id"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             face_id = str(uuid.uuid4())[:8]
@@ -380,9 +384,11 @@ class FacialRecognitionSystem:
                 json.dump(metadata, f)
             
             self.logger.info(f"Saved unknown face: {face_id}")
+            return face_id
             
         except Exception as e:
             self.logger.error(f"Error saving unknown face: {e}")
+            return None
     
     def encrypt_encoding(self, encoding):
         """Encrypt face encoding"""
@@ -422,14 +428,22 @@ class FacialRecognitionSystem:
     def run(self):
         """Main recognition loop"""
         self.logger.info("Starting facial recognition system...")
-        self.logger.info("Press 'q' to quit, 'r' to reload faces, 's' to toggle stats")
+        print("\nFacial Recognition System Running")
+        print("=================================")
+        print("Controls:")
+        print("  'q' - Quit")
+        print("  'r' - Reload known faces")
+        print("  's' - Toggle performance stats")
+        print("\nTo add known faces:")
+        print("1. Save a clear photo of the person in data/known_faces/")
+        print("2. Name the file as the person's name (e.g., data/known_faces/John.jpg)")
+        print("3. Press 'r' to reload the known faces\n")
         
         while self.running:
             try:
                 # Capture frame
                 ret, frame = self.get_frame()
                 if not ret:
-                    self.logger.error("Failed to capture frame")
                     continue
                 
                 # Process frame
@@ -448,10 +462,15 @@ class FacialRecognitionSystem:
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
+                    print("\nShutting down...")
                     self.running = False
                 elif key == ord('r'):
-                    self.logger.info("Reloading known faces...")
+                    print("\nReloading known faces...")
                     self.load_known_faces()
+                    print(f"Loaded {len(self.known_face_names)} known faces")
+                    if self.known_face_names:
+                        print("Known people:", ", ".join(self.known_face_names))
+                    print()
                 elif key == ord('s'):
                     self.show_stats = not self.show_stats
                 
@@ -459,10 +478,10 @@ class FacialRecognitionSystem:
                 self.logger.error(f"Error in main loop: {e}")
                 if not self.running:
                     break
-                time.sleep(1)  # Prevent rapid error loops
+                time.sleep(1)
         
         self.cleanup()
-        self.logger.info("System shutdown complete")
+        print("\nSystem shutdown complete")
 
 def main():
     """Main entry point"""
