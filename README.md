@@ -1,90 +1,98 @@
-# Raspberry Pi Facial Recognition & Greeting System
+# Raspberry Pi Facial Recognition System
 
-Real-time facial recognition system with voice greetings for Raspberry Pi. The system performs automatic face detection, recognition of known individuals, voice greeting synthesis, and unknown visitor logging.
+Real-time facial recognition system for Raspberry Pi that implements face detection, recognition, and voice synthesis for greetings. Includes a web interface for system management.
 
-## Quick Start
+## Core Components
 
-1. **Installation**
-```bash
-# Clone repository
-git clone https://github.com/mbrassey/pi-greeting-system
-cd pi-greeting-system
+- **Face Processing**
+  - Face detection: HOG or CNN models
+  - Face recognition with adjustable tolerance
+  - Compatible with USB webcams and Pi Camera modules
+  - IMX519 sensor optimization
+  - Configurable resolution and frame rate
 
-# Run installation
-./install.sh
-```
+- **Audio Output**
+  - Text-to-speech synthesis
+  - Multiple language support
+  - Bluetooth audio compatibility
+  - Configurable greeting intervals
 
-2. **Face Registration**
-```bash
-# From image file
-./add_face.sh /path/to/photo.jpg "John Doe"
+- **Web Interface**
+  - System monitoring dashboard
+  - Face database management
+  - System metrics
+  - SSL/TLS support
+  - Responsive web design
 
-# Via camera capture
-./add_face.sh --capture "John Doe"
-```
+- **Security**
+  - Face data encryption (optional)
+  - IP address filtering
+  - Session management
+  - Login attempt limiting
+  - HTTPS configuration
 
-3. **System Launch**
-```bash
-# Development mode (with display)
-./start.sh
-
-# Service mode (background)
-sudo ./install_service.sh
-```
+- **System Functions**
+  - Unknown face detection and storage
+  - Face image quality validation
+  - Multiple angle face registration
+  - Automated backups
+  - Performance tuning options
 
 ## Hardware Requirements
 
-- **Minimum Specifications**:
-  - Raspberry Pi 3B+ or newer (Pi 4 recommended)
-  - 2GB RAM (4GB+ recommended)
-  - 16GB SD card with 5GB+ free space
-  - USB webcam or Pi Camera Module
-  - Audio output device for voice synthesis
+**Minimum:**
+- Raspberry Pi 3B+ or newer
+- 2GB RAM
+- 16GB SD card
+- Camera (USB or Pi Camera Module)
+- Audio output device
 
-- **Recommended Configuration**:
-  - Raspberry Pi 4 (4GB or 8GB RAM)
-  - Pi Camera Module v2/v3
-  - Official Raspberry Pi 7" Display
-  - USB/Bluetooth Speaker
-  - 32GB+ SD Card
+**Recommended:**
+- Raspberry Pi 4 (4GB/8GB RAM)
+- Pi Camera Module 3 (IMX519)
+- 7" Raspberry Pi Display
+- Bluetooth/USB Speaker
+- 64GB SD Card
+- Sufficient lighting (min. 200 lux)
 
-## Installation Guide
+## Installation
 
-### 1. System Preparation
-
+1. **System Setup**
 ```bash
-# Update system packages
+# Update packages
 sudo apt update && sudo apt upgrade -y
 
-# Configure interfaces
+# Enable interfaces
 sudo raspi-config
-# Interface Options > Camera, I2C, Remote GPIO
+# Enable: Camera, I2C, Remote GPIO
 ```
 
-### 2. System Installation
-
+2. **Software Installation**
 ```bash
-# Clone repository
-git clone https://github.com/mbrassey/pi-greeting-system
+git clone https://github.com/yourusername/pi-greeting-system
 cd pi-greeting-system
-
-# Verify system compatibility
-./check_system.sh
-
-# Install system components
 ./install.sh
 ```
 
-### 3. System Configuration
+3. **Initial Configuration**
+```bash
+# Configure web interface
+./setup_web.sh
 
-Configuration parameters in `config.yml`:
+# Edit system settings
+nano config.yml
+```
+
+## Configuration
+
+Key settings in `config.yml`:
 
 ```yaml
-# Core configuration
-camera:
-  type: 'picamera'  # 'picamera' or 'usb'
-  device: 0         # Camera device index
-  resolution: [1280, 720]
+recognition:
+  tolerance: 0.6    # Face matching threshold (0.4-0.6)
+  model: 'hog'      # Detection model: 'hog' or 'cnn'
+  frame_rate: 30    # Frames per second
+  resolution: [1920, 1080]
 
 greeting:
   enabled: true
@@ -92,238 +100,137 @@ greeting:
   language: 'en'
   custom_greetings:
     "John Doe": "Welcome back, sir!"
+
+security:
+  encrypt_faces: false
+  allowed_ips: []
+  session_timeout: 3600
 ```
 
-## Operation Guide
+## Usage
 
-### Face Management
+### Face Database Management
 
 1. **Face Registration**
 ```bash
-# Single image registration
-./add_face.sh /path/to/photo.jpg "Person Name"
+# Register from file
+./manage_faces.sh add /path/to/photo.jpg "Person Name"
 
-# Camera capture registration
-./add_face.sh --capture "Person Name"
+# Register via camera
+./manage_faces.sh capture "Person Name"
 
-# Multi-angle registration
-./add_face.sh --multi "Person Name"
+# Register multiple angles
+./manage_faces.sh multi "Person Name"
 ```
 
-2. **Face Database Management**
+2. **Database Operations**
 ```bash
 # List registered faces
 ./manage_faces.sh list-known
 
-# Remove registration
+# Remove face
 ./manage_faces.sh remove "Person Name"
-```
 
-### Unknown Face Processing
-
-1. **Database Review**
-```bash
-# List unknown faces
-./manage_faces.sh list-unknown
-```
-
-2. **Face Registration from Unknown**
-```bash
-# List unknown faces for ID reference
-./manage_faces.sh list-unknown
-
-# Register unknown face
-./manage_faces.sh promote <face_id> "Person Name"
-```
-
-3. **Database Maintenance**
-```bash
-# Clean entries older than 30 days
+# Remove old unknown faces
 ./manage_faces.sh clean 30
 ```
 
-### System Control
+### System Operations
 
-1. **Service Management**
+1. **System Control**
 ```bash
-# Start services
-sudo systemctl start facial-recognition
-sudo systemctl start facial-recognition-web
+# Start with display output
+./start.sh
 
-# Service control scripts
-./service_start.sh
-./service_stop.sh
-./service_restart.sh
+# Run as service
+sudo ./install_service.sh
+sudo systemctl start facial-recognition
 ```
 
-2. **System Monitoring**
+2. **Web Interface Access**
 ```bash
-# Service status
-./service_status.sh
+# Interface URL
+http://<raspberry-pi-ip>:8080
 
-# Real-time monitoring
+# Authentication
+Username: admin
+Password: [set during installation]
+```
+
+3. **System Monitoring**
+```bash
+# View status
 ./monitor.sh
 
-# Log inspection
+# View logs
 tail -f /var/log/facial-recognition/system.log
 ```
 
-3. **Web Interface**
-```bash
-# Interface access
-http://<raspberry-pi-ip>:8080
+### System Maintenance
 
-# Default authentication
-Username: admin
-Password: admin  # Requires immediate change
-```
-
-### Performance Optimization
-
-1. **Recognition Parameters**
-```yaml
-# config.yml
-recognition:
-  tolerance: 0.6    # Recognition strictness
-  model: 'hog'      # Detection model: 'hog' (performance) or 'cnn' (accuracy)
-  frame_rate: 30    # Processing rate
-```
-
-2. **Camera Configuration**
-```yaml
-camera:
-  type: 'picamera'
-  resolution: [1280, 720]
-  flip_horizontal: false
-  flip_vertical: false
-```
-
-3. **Resource Allocation**
-```bash
-# GPU memory allocation
-vcgencmd get_mem gpu
-
-# Adjust allocation in /boot/config.txt
-gpu_mem=128
-```
-
-## Troubleshooting
-
-### Camera Issues
-
-1. **Connection Verification**
-```bash
-# Device enumeration
-ls /dev/video*
-
-# Pi Camera status
-vcgencmd get_camera
-
-# Camera diagnostics
-./test_camera.sh
-```
-
-2. **Recognition Quality**
-- Verify lighting conditions
-- Implement multi-angle registration
-- Adjust recognition tolerance
-- Ensure lens cleanliness
-
-### Audio Issues
-
-1. **Output Verification**
-```bash
-# Audio diagnostics
-./test_audio.sh
-
-# Device enumeration
-aplay -l
-
-# Output testing
-speaker-test -t wav
-```
-
-2. **Voice Synthesis**
-- Adjust volume parameters
-- Test alternative voices
-- Verify output device selection
-
-### System Issues
-
-1. **Service Diagnostics**
-```bash
-# Service status inspection
-systemctl status facial-recognition
-
-# Detailed logging
-journalctl -u facial-recognition -n 50
-```
-
-2. **Performance Issues**
-- Reduce frame processing rate
-- Switch to HOG detection
-- Decrease resolution
-- Terminate unnecessary processes
-
-3. **Memory Management**
-- Monitor usage: `./monitor.sh`
-- Reduce frame buffer
-- Implement database cleanup
-- Consider memory upgrade
-
-## Maintenance
-
-1. **Data Backup**
+1. **Backup Operations**
 ```bash
 # Create backup
 ./backup.sh
 
-# Restore from backup
+# Restore backup
 ./backup.sh restore backup_20240101.tar.gz
 ```
 
-2. **System Maintenance**
+2. **System Updates**
 ```bash
-# Database cleanup
-./manage_faces.sh clean 30
-
-# System diagnostics
-./monitor.sh
-
-# System update
 ./update.sh
 ```
 
-## Security Implementation
+## Troubleshooting
 
-1. **Basic Security**
-- Modify default credentials
-- Enable HTTPS
-- Implement network restrictions
+### Camera
+- Execute `./test_camera.sh` for diagnostics
+- Verify interface activation
+- Check lighting conditions (200+ lux recommended)
+- Ensure clean lens surface
+
+### Audio
+- Execute `./test_audio.sh` for diagnostics
+- Verify audio device connections
+- Check audio device selection
+- Verify system volume configuration
+
+### Recognition
+- Adjust tolerance value in config.yml
+- Implement multiple angle registration
+- Ensure adequate lighting
+- Test CNN model for improved accuracy
+
+### Performance
+- Lower resolution/frame rate
+- Use HOG detection model
+- Remove old face data
+- Monitor resource usage with `./monitor.sh`
+
+## Security Configuration
+
+1. **Basic Setup**
+- Update default credentials
+- Configure HTTPS
+- Set IP allowlist
 - Maintain system updates
 
-2. **Data Protection**
-```yaml
-# Security configuration
-security:
-  encrypt_faces: true
-  session_timeout: 3600
-  max_login_attempts: 5
-```
+2. **Data Security**
+- Enable face encryption
+- Configure backup schedule
+- Set file permissions (600 for keys, 644 for data)
+- Schedule security audits
 
-3. **Access Control**
-- Implement strong authentication
-- Enable rate limiting
-- Configure IP restrictions
-- Set access permissions
+## Development
 
-## Support
-
-- Issue tracking: GitHub Issues
-- Updates: `./update.sh`
-- Contributions: Pull requests
+- Issue tracker: GitHub Issues
 - Documentation: `/docs`
+- Pull requests: Accepted with tests
+- Discussions: GitHub Discussions
 
 ## License
 
-MIT License - See LICENSE file for details. 
+`pi-greeting-system` is published under the **CC0_1.0_Universal** license.
+
+> The Creative Commons CC0 Public Domain Dedication waives copyright interest in a work you've created and dedicates it to the world-wide public domain. Use CC0 to opt out of copyright entirely and ensure your work has the widest reach. As with the Unlicense and typical software licenses, CC0 disclaims warranties. CC0 is very similar to the Unlicense.
