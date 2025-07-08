@@ -132,21 +132,28 @@ class FacialRecognitionSystem:
     
     def setup_audio(self):
         """Initialize text-to-speech synthesis engine"""
-        if self.config['greeting']['enabled']:
-            try:
-                self.tts_engine = pyttsx3.init()
-                self.tts_engine.setProperty('rate', self.config['greeting']['rate'])
-                self.tts_engine.setProperty('volume', self.config['greeting']['volume'])
-                self.tts_queue = queue.Queue()
-                self.tts_thread = threading.Thread(
-                    target=self.process_tts_queue, 
-                    daemon=True
-                )
-                self.tts_thread.start()
-                self.logger.info("Audio system initialized")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize audio: {e}")
-                self.config['greeting']['enabled'] = False
+        try:
+            self.logger.info("Initializing audio system...")
+            self.tts_engine = pyttsx3.init()
+            self.tts_engine.setProperty('rate', 150)  # Default rate
+            self.tts_engine.setProperty('volume', 1.0)  # Full volume
+            
+            # Test audio
+            self.tts_engine.say("Audio system initialized")
+            self.tts_engine.runAndWait()
+            
+            self.tts_queue = queue.Queue()
+            self.tts_thread = threading.Thread(
+                target=self.process_tts_queue, 
+                daemon=True
+            )
+            self.tts_thread.start()
+            self.logger.info("Audio system initialized")
+            print("Audio system ready - you should have heard a test message")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize audio: {e}")
+            print("WARNING: Audio system failed to initialize - no speech output available")
+            self.config['greeting']['enabled'] = False
     
     def setup_face_recognition(self):
         """Initialize face detection and recognition components"""
@@ -214,7 +221,7 @@ class FacialRecognitionSystem:
         while True:
             try:
                 message = self.tts_queue.get(timeout=1)
-                if message and self.config['greeting']['enabled']:
+                if message and hasattr(self, 'tts_engine'):
                     self.tts_engine.say(message)
                     self.tts_engine.runAndWait()
                 self.tts_queue.task_done()
@@ -222,11 +229,16 @@ class FacialRecognitionSystem:
                 continue
             except Exception as e:
                 self.logger.error(f"TTS Error: {e}")
+                print(f"Speech failed: {e}")  # Debug output
     
     def speak_async(self, message):
         """Add message to TTS queue"""
-        if self.config['greeting']['enabled']:
-            self.tts_queue.put(message)
+        try:
+            if hasattr(self, 'tts_queue'):
+                self.tts_queue.put(message)
+                print(f"Speaking: {message}")  # Debug output
+        except Exception as e:
+            self.logger.error(f"Failed to queue speech: {e}")
     
     def get_frame(self):
         """Get frame from camera with error recovery"""
@@ -348,20 +360,25 @@ class FacialRecognitionSystem:
         face_key = str(face_location)
         if face_key not in self.unknown_face_counters:
             self.unknown_face_counters[face_key] = 0
+            print("Starting face capture sequence...")
         
         self.unknown_face_counters[face_key] += 1
+        print(f"Capture progress: {self.unknown_face_counters[face_key]}/5 frames")
         
         # Save unknown face after seeing it a few times (to ensure good quality)
-        if self.unknown_face_counters[face_key] >= 5:  # Reduced from 10 to 5 frames
-            face_id = self.save_unknown_face(frame, face_location, face_encoding)
-            if face_id:
-                print(f"Saved new face as ID: {face_id}")
-                print(f"Photo saved to: data/unknown_faces/unknown_*_{face_id}.jpg")
-                print("To name this person:")
-                print(f"1. Copy their photo from unknown_faces to known_faces")
-                print("2. Rename it to their name (e.g., John.jpg)")
-                print("3. Press 'r' to reload known faces")
-            self.unknown_face_counters[face_key] = -1000  # Prevent multiple saves
+        if self.unknown_face_counters[face_key] >= 5:  # 5 frames for quick capture
+            if face_key not in self.unknown_face_counters or self.unknown_face_counters[face_key] != -1000:  # Check if not already saved
+                face_id = self.save_unknown_face(frame, face_location, face_encoding)
+                if face_id:
+                    print(f"\nSaved new face as ID: {face_id}")
+                    print(f"Photo saved to: data/unknown_faces/unknown_*_{face_id}.jpg")
+                    print("To name this person:")
+                    print(f"1. Copy their photo: cp data/unknown_faces/unknown_*_{face_id}.jpg data/known_faces/PersonName.jpg")
+                    print("2. Press 'r' to reload known faces")
+                    # Announce new face saved
+                    if self.config['greeting']['enabled']:
+                        self.speak_async("New face detected and saved")
+                self.unknown_face_counters[face_key] = -1000  # Mark as saved
     
     def save_unknown_face(self, frame, face_location, face_encoding):
         """Save unknown face and return face_id"""
@@ -455,6 +472,10 @@ class FacialRecognitionSystem:
         print("  1. Copy their photo from unknown_faces to known_faces")
         print("  2. Rename it to their name (e.g., John.jpg)")
         print("  3. Press 'r' to reload\n")
+        
+        # Test audio at startup
+        if self.config['greeting']['enabled']:
+            self.speak_async("System ready")
         
         if self.known_face_names:
             print("Currently known people:", ", ".join(self.known_face_names))
