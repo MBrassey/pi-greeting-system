@@ -69,17 +69,21 @@ install_system_deps() {
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     
+    # Remove potentially conflicting packages
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y \
+        python3-numpy \
+        python3-opencv \
+        python3-dlib \
+        || true
+    
     # Install dependencies one at a time
     packages=(
         "python3-dev"
         "python3-pip"
         "python3-setuptools"
-        "python3-opencv"
-        "python3-numpy"
         "python3-pil"
         "python3-yaml"
         "python3-psutil"
-        "python3-dlib"
         "cmake"
         "build-essential"
         "libopenblas-dev"
@@ -89,6 +93,7 @@ install_system_deps() {
         "v4l-utils"
         "espeak"
         "git"
+        "python3-opencv"
     )
     
     for package in "${packages[@]}"; do
@@ -120,33 +125,47 @@ install_python_packages() {
     # Update pip with break-system-packages flag
     python3 -m pip install --upgrade pip --break-system-packages
     
-    # Install packages with break-system-packages flag
-    packages=(
-        "numpy"
-        "dlib"
-        "face_recognition"
-        "pyttsx3"
-        "Flask"
-        "cryptography"
-    )
+    # Install numpy first with specific version
+    log "Installing numpy..."
+    python3 -m pip install --no-cache-dir 'numpy>=1.24.0,<2.0.0' --break-system-packages
     
-    for package in "${packages[@]}"; do
-        log "Installing $package..."
-        python3 -m pip install --no-cache-dir "$package" --break-system-packages
-        
-        # Verify installation
-        if ! python3 -c "import ${package//-/_}" 2>/dev/null; then
-            warning "Failed to verify $package, attempting reinstall..."
-            python3 -m pip install --no-cache-dir --force-reinstall "$package" --break-system-packages
-        fi
-    done
+    # Install dlib
+    log "Installing dlib..."
+    python3 -m pip install --no-cache-dir dlib --break-system-packages
+    
+    # Install face_recognition
+    log "Installing face_recognition..."
+    python3 -m pip install --no-cache-dir face_recognition --break-system-packages
+    
+    # Install other packages
+    log "Installing additional packages..."
+    python3 -m pip install --no-cache-dir \
+        pyttsx3 \
+        Flask \
+        cryptography \
+        --break-system-packages
 }
 
 # Function to verify Python packages
 verify_python_packages() {
     log "Verifying Python packages..."
     
-    packages=("dlib" "face_recognition" "cv2" "numpy" "pyttsx3" "flask" "yaml")
+    # Test numpy version first
+    if python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null; then
+        info "NumPy version: $(python3 -c 'import numpy; print(numpy.__version__)')"
+    else
+        error "NumPy not properly installed"
+    fi
+    
+    # Test OpenCV
+    if python3 -c "import cv2; print(cv2.__version__)" 2>/dev/null; then
+        info "OpenCV version: $(python3 -c 'import cv2; print(cv2.__version__)')"
+    else
+        error "OpenCV not properly installed"
+    fi
+    
+    # Test other packages
+    packages=("dlib" "face_recognition" "pyttsx3" "flask" "yaml")
     failed_packages=()
     
     for package in "${packages[@]}"; do
@@ -231,6 +250,35 @@ EOF
     fi
 }
 
+# Function to create start script
+create_start_script() {
+    log "Creating start script..."
+    
+    cat > start-facial-recognition << 'EOF'
+#!/bin/bash
+
+# Set display
+export DISPLAY=:0
+export XAUTHORITY=/home/$USER/.Xauthority
+
+# Change to installation directory
+cd "$(dirname "$0")"
+
+# Fix video permissions if needed
+for device in /dev/video*; do
+    if [ -e "$device" ]; then
+        sudo chmod 666 "$device"
+    fi
+done
+
+# Run the facial recognition system
+python3 face_recognition.py
+EOF
+    
+    chmod +x start-facial-recognition
+    chown $SUDO_USER:$SUDO_USER start-facial-recognition
+}
+
 # Function to verify camera
 verify_camera() {
     log "Verifying camera access..."
@@ -266,13 +314,16 @@ main() {
     # Set up configuration
     setup_config
     
+    # Create start script
+    create_start_script
+    
     # Verify camera
     verify_camera || true
     
     # Final verification
     if verify_python_packages; then
         log "Installation completed successfully!"
-        log "You can now run the system with: python3 face_recognition.py"
+        log "You can now run the system with: ./start-facial-recognition"
     else
         warning "Installation completed with some package verification failures"
         log "The system may still work, but some features might be limited"
