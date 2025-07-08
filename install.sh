@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Raspberry Pi Facial Recognition System Installation Script
-# Handles complete system installation and dependency management
+# Optimized for Raspberry Pi 5 running Raspberry Pi OS
 
 # Colors for output
 RED='\033[0;31m'
@@ -24,15 +24,34 @@ check_root() {
     fi
 }
 
+# Function to fix package manager
+fix_package_manager() {
+    log "Fixing package manager state..."
+    
+    # Fix any broken dependencies
+    apt-get -f install -y
+    
+    # Clean package cache
+    apt-get clean
+    apt-get autoclean
+    
+    # Update package lists
+    rm -f /var/lib/apt/lists/lock
+    rm -f /var/cache/apt/archives/lock
+    rm -f /var/lib/dpkg/lock*
+    dpkg --configure -a
+    apt-get update
+}
+
 # Function to install system dependencies
 install_system_deps() {
     log "Installing system dependencies..."
     
-    # Update package lists and upgrade system
-    apt-get update && apt-get upgrade -y
+    # Fix package manager first
+    fix_package_manager
     
     # Install essential packages
-    apt-get install -y \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3-dev \
         python3-pip \
         python3-setuptools \
@@ -41,6 +60,7 @@ install_system_deps() {
         python3-pil \
         python3-yaml \
         python3-psutil \
+        python3-picamera2 \
         cmake \
         build-essential \
         libopenblas-dev \
@@ -49,7 +69,11 @@ install_system_deps() {
         libatlas-base-dev \
         v4l-utils \
         espeak \
-        || true
+        git \
+        || {
+            error "Failed to install system packages"
+            exit 1
+        }
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -74,49 +98,48 @@ install_system_deps() {
 install_python_packages() {
     log "Installing Python packages..."
     
-    # Install dlib with specific version
-    log "Installing dlib..."
-    python3 -m pip install --break-system-packages dlib==19.24.1
-
-    # Install face_recognition and its dependencies
-    log "Installing face_recognition and dependencies..."
-    python3 -m pip install --break-system-packages \
-        face_recognition==1.3.0 \
-        Click>=6.0 \
-        scipy>=0.17.0
-
-    # Install remaining packages
-    log "Installing remaining packages..."
-    python3 -m pip install --break-system-packages \
-        pyttsx3==2.90 \
-        Flask==2.3.3 \
-        cryptography==41.0.1
-
-    # Verify installations
-    log "Verifying installations..."
-    verify_python_packages
+    # Install dlib using apt instead of building from source
+    log "Installing dlib using apt..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y python3-dlib || {
+        error "Failed to install python3-dlib"
+        exit 1
+    }
+    
+    # Install face_recognition using pip
+    log "Installing face_recognition..."
+    python3 -m pip install --no-cache-dir face_recognition || {
+        error "Failed to install face_recognition"
+        exit 1
+    }
+    
+    # Install other required packages
+    log "Installing additional Python packages..."
+    python3 -m pip install --no-cache-dir \
+        pyttsx3 \
+        Flask \
+        cryptography \
+        || {
+            error "Failed to install Python packages"
+            exit 1
+        }
 }
 
 # Function to verify Python packages
 verify_python_packages() {
     log "Verifying Python packages..."
     
-    # Test face_recognition import
-    if python3 -c "import face_recognition; print('face_recognition available')" 2>/dev/null; then
-        info "face_recognition package verified"
-    else
-        error "face_recognition package not working"
-        return 1
-    fi
+    # List of required packages
+    packages=("dlib" "face_recognition" "cv2" "numpy" "pyttsx3" "flask" "yaml")
     
-    # Test OpenCV import
-    if python3 -c "import cv2; print('OpenCV available')" 2>/dev/null; then
-        info "OpenCV package verified"
-    else
-        error "OpenCV package not working"
-        return 1
-    fi
+    for package in "${packages[@]}"; do
+        log "Testing import of $package..."
+        if ! python3 -c "import $package" 2>/dev/null; then
+            error "Failed to import $package"
+            return 1
+        fi
+    done
     
+    info "All Python packages verified successfully"
     return 0
 }
 
@@ -191,541 +214,63 @@ EOF
     fi
 }
 
-# Function to create the desktop autostart entry
-create_autostart() {
-    log "Creating desktop autostart entry..."
-    
-    # Create autostart directory
-    local autostart_dir="/home/$SUDO_USER/.config/autostart"
-    mkdir -p "$autostart_dir"
-    
-    # Create desktop entry
-    cat > "$autostart_dir/facial-recognition.desktop" << EOF
-[Desktop Entry]
-Type=Application
-Name=Facial Recognition System
-Comment=Facial Recognition System with Camera Feed
-Exec=/usr/local/bin/start-facial-recognition
-Terminal=false
-X-GNOME-Autostart-enabled=true
-StartupNotify=true
-EOF
-    
-    # Create startup script
-    cat > /usr/local/bin/start-facial-recognition << 'EOF'
-#!/bin/bash
-
-# Set display
-export DISPLAY=:0
-export XAUTHORITY=/home/$USER/.Xauthority
-
-# Change to installation directory
-cd /home/$USER/code/pi-greeting-system
-
-# Fix video permissions if needed
-for device in /dev/video*; do
-    if [ -e "$device" ]; then
-        sudo chmod 666 "$device"
-    fi
-done
-
-# Activate virtual environment
-source venv/bin/activate
-
-# Run the facial recognition system
-python3 face_recognition.py
-
-# Deactivate virtual environment
-deactivate
-EOF
-    
-    # Make startup script executable
-    chmod +x /usr/local/bin/start-facial-recognition
-    
-    # Set proper ownership
-    chown $SUDO_USER:$SUDO_USER "$autostart_dir/facial-recognition.desktop"
-    chown $SUDO_USER:$SUDO_USER /usr/local/bin/start-facial-recognition
-
-    # Also create a desktop shortcut
-    local desktop_dir="/home/$SUDO_USER/Desktop"
-    if [ -d "$desktop_dir" ]; then
-        cp "$autostart_dir/facial-recognition.desktop" "$desktop_dir/"
-        chown $SUDO_USER:$SUDO_USER "$desktop_dir/facial-recognition.desktop"
-        chmod +x "$desktop_dir/facial-recognition.desktop"
-    fi
-}
-
-# Function to set up system service (only for background tasks)
-setup_service() {
-    log "Setting up system service..."
-    
-    # Create service file for web interface only
-    cat > /etc/systemd/system/facial-recognition-web.service << EOF
-[Unit]
-Description=Facial Recognition Web Interface
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$SUDO_USER
-Group=$SUDO_USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/venv/bin/python web_interface.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # Set up log rotation
-    cat > /etc/logrotate.d/facial-recognition << EOF
-/var/log/facial-recognition/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 $SUDO_USER $SUDO_USER
-}
-EOF
-
-    # Create log directory
-    mkdir -p /var/log/facial-recognition
-    chown -R $SUDO_USER:$SUDO_USER /var/log/facial-recognition
-
-    # Reload systemd and enable web service
-    systemctl daemon-reload
-    systemctl enable facial-recognition-web.service
-    systemctl start facial-recognition-web.service
-}
-
-# Function to update face_recognition.py
-update_face_recognition() {
-    log "Updating face recognition script..."
-    
-    # Create backup
-    cp face_recognition.py face_recognition.py.bak
-    
-    # Create new version of the script
-    cat > face_recognition.py << 'EOF'
-#!/usr/bin/env python3
-import cv2
-import face_recognition
-import numpy as np
-import yaml
-import os
-import json
-import time
-import uuid
-import logging
-import threading
-import queue
-import pyttsx3
-import psutil
-import signal
-import sys
-from datetime import datetime
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
-
-class FacialRecognitionSystem:
-    def __init__(self):
-        self.setup_logging()
-        self.load_config()
-        self.initialize_components()
-        self.setup_signal_handlers()
-        
-    def setup_logging(self):
-        self.logger = logging.getLogger('FacialRecognition')
-        self.logger.setLevel(logging.INFO)
-        
-        log_file = '/var/log/facial-recognition/system.log'
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        file_handler = RotatingFileHandler(log_file, maxBytes=10485760, backupCount=5)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-        self.logger.addHandler(file_handler)
-        
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-        self.logger.addHandler(console_handler)
-    
-    def load_config(self):
-        try:
-            with open('config.yml', 'r') as f:
-                self.config = yaml.safe_load(f)
-            self.logger.info("Configuration loaded successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to load config: {e}")
-            sys.exit(1)
-    
-    def initialize_components(self):
-        self.setup_storage()
-        self.setup_camera()
-        self.initialize_audio()
-        self.setup_face_recognition()
-        self.running = True
-        self.frame_times = []
-        self.last_greeting_time = {}
-        
-    def setup_storage(self):
-        storage_config = self.config['storage']
-        self.base_dir = Path(storage_config['base_dir'])
-        for dir_name in ['known_faces_dir', 'unknown_faces_dir', 'logs_dir']:
-            dir_path = Path(storage_config[dir_name])
-            dir_path.mkdir(parents=True, exist_ok=True)
-            setattr(self, dir_name, dir_path)
-    
-    def setup_camera(self):
-        self.camera = cv2.VideoCapture(0)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.camera.set(cv2.CAP_PROP_FPS, 30)
-        
-        # Create window
-        cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
-        cv2.moveWindow('Facial Recognition System', 0, 0)
-    
-    def initialize_audio(self):
-        try:
-            self.tts_engine = pyttsx3.init()
-            self.tts_engine.setProperty('rate', 150)
-            self.tts_engine.setProperty('volume', 0.8)
-            self.tts_queue = queue.Queue()
-            self.tts_thread = threading.Thread(target=self.process_tts_queue, daemon=True)
-            self.tts_thread.start()
-        except Exception as e:
-            self.logger.error(f"Failed to initialize audio: {e}")
-    
-    def process_tts_queue(self):
-        while True:
-            try:
-                message = self.tts_queue.get(timeout=1)
-                if message:
-                    self.tts_engine.say(message)
-                    self.tts_engine.runAndWait()
-                self.tts_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self.logger.error(f"TTS Error: {e}")
-    
-    def setup_face_recognition(self):
-        self.known_face_encodings = []
-        self.known_face_names = []
-        self.load_known_faces()
-    
-    def load_known_faces(self):
-        for face_file in self.known_faces_dir.glob('*.*'):
-            if face_file.suffix.lower() in ('.png', '.jpg', '.jpeg'):
-                name = face_file.stem
-                image = face_recognition.load_image_file(str(face_file))
-                face_encodings = face_recognition.face_encodings(image)
-                if face_encodings:
-                    self.known_face_encodings.append(face_encodings[0])
-                    self.known_face_names.append(name)
-    
-    def setup_signal_handlers(self):
-        signal.signal(signal.SIGINT, self.handle_shutdown)
-        signal.signal(signal.SIGTERM, self.handle_shutdown)
-    
-    def handle_shutdown(self, signum, frame):
-        self.running = False
-    
-    def get_frame(self):
-        ret, frame = self.camera.read()
-        if not ret:
-            self.logger.warning("Failed to capture frame, retrying...")
-            return False, None
-        return True, frame
-
-    def run(self):
-        self.logger.info("Starting facial recognition system...")
-        
-        while self.running:
-            ret, frame = self.get_frame()
-            if not ret:
-                continue
-            
-            # Process frame for face detection
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            face_locations = face_recognition.face_locations(rgb_frame)
-            
-            if face_locations:
-                # Get face encodings
-                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-                
-                # Check each face
-                for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-                    name = "Unknown"
-                    
-                    if self.known_face_encodings:
-                        matches = face_recognition.compare_faces(
-                            self.known_face_encodings, 
-                            face_encoding,
-                            tolerance=0.6
-                        )
-                        if True in matches:
-                            name = self.known_face_names[matches.index(True)]
-                            self.greet_person(name)
-                    
-                    # Draw rectangle and name
-                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                    cv2.putText(frame, name, (left, bottom + 20),
-                              cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Display frame
-            cv2.imshow('Facial Recognition System', frame)
-            
-            # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-        
-        self.cleanup()
-
-    def greet_person(self, name):
-        current_time = time.time()
-        last_greeting = self.last_greeting_time.get(name, 0)
-        
-        if current_time - last_greeting > 30:  # 30 seconds between greetings
-            self.last_greeting_time[name] = current_time
-            greeting = f"Hello {name}!"
-            self.tts_queue.put(greeting)
-
-    def cleanup(self):
-        self.camera.release()
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    system = FacialRecognitionSystem()
-    system.run()
-EOF
-
-    # Update config.yml
-    cat > config.yml << 'EOF'
-# Recognition settings
-recognition:
-  tolerance: 0.6
-  model: 'hog'
-  frame_rate: 30
-  resolution: [640, 480]
-  min_face_size: 20
-  blur_threshold: 100
-
-# Camera settings
-camera:
-  type: 'usb'  # 'usb' or 'picamera'
-  device: 0
-  brightness: 50
-  contrast: 55
-  flip_horizontal: false
-  flip_vertical: false
-
-# Storage settings
-storage:
-  base_dir: 'data'
-  known_faces_dir: 'data/known_faces'
-  unknown_faces_dir: 'data/unknown_faces'
-  logs_dir: 'data/logs'
-
-# Greeting settings
-greeting:
-  enabled: true
-  volume: 0.8
-  rate: 150
-  cooldown: 30
-  custom_greetings: {}
-EOF
-}
-
-# Function to verify installation
-verify_installation() {
-    log "Verifying installation..."
-    local errors=0
-    
-    # Check Python packages
-    for package in numpy opencv-python dlib face_recognition pyttsx3 Flask PyYAML; do
-        if ! pip show $package >/dev/null 2>&1; then
-            error "Python package $package not installed properly"
-            errors=$((errors + 1))
-        fi
-    done
-    
-    # Check directories
-    for dir in data/known_faces data/unknown_faces data/logs templates static/faces ssl; do
-        if [ ! -d "$dir" ]; then
-            error "Directory $dir not created properly"
-            errors=$((errors + 1))
-        fi
-    done
-    
-    # Check configuration
-    if [ ! -f "config.yml" ]; then
-        error "Configuration file not created"
-        errors=$((errors + 1))
-    fi
-    
-    return $errors
-}
-
-# Function to update system scripts
-update_scripts() {
-    log "Updating system scripts..."
-    
-    # Make scripts executable
-    chmod +x *.sh *.py
-    
-    # Create update script
-    cat > update.sh << 'EOF'
-#!/bin/bash
-git pull
-sudo ./install.sh
-EOF
-    chmod +x update.sh
-    
-    # Create backup script
-    cat > backup.sh << 'EOF'
-#!/bin/bash
-backup_dir="data/backups/$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$backup_dir"
-cp -r data/known_faces "$backup_dir/"
-cp -r data/unknown_faces "$backup_dir/"
-cp config.yml "$backup_dir/"
-tar czf "$backup_dir.tar.gz" "$backup_dir"
-rm -rf "$backup_dir"
-echo "Backup created: $backup_dir.tar.gz"
-EOF
-    chmod +x backup.sh
-}
-
-# Function to verify system libraries
-verify_system_libs() {
-    log "Verifying system libraries..."
-    
-    # Check for critical libraries
-    local missing_libs=()
-    
-    libs_to_check=(
-        "libcamera.so"
-        "libcamera-base.so"
-        "libboost_python"
-        "libv4l2.so"
-        "libopencv_core.so"
-    )
-    
-    for lib in "${libs_to_check[@]}"; do
-        if ! ldconfig -p | grep -q "$lib"; then
-            missing_libs+=($lib)
-        fi
-    done
-    
-    if [ ${#missing_libs[@]} -ne 0 ]; then
-        warning "Missing system libraries: ${missing_libs[*]}"
-        log "Attempting to install missing libraries..."
-        apt-get install -y \
-            libcamera0 \
-            libcamera-dev \
-            libboost-python-dev \
-            libv4l-dev \
-            python3-opencv \
-            || true
-        ldconfig
-    fi
-}
-
-# Function to configure camera
-configure_camera() {
-    log "Configuring camera system..."
-    
-    # Enable camera interface
-    raspi-config nonint do_camera 0
-    
-    # Enable legacy camera support in config.txt if not already enabled
-    if ! grep -q "legacy_camera=1" /boot/config.txt; then
-        echo "legacy_camera=1" | sudo tee -a /boot/config.txt
-    fi
-    
-    # Create V4L2 device
-    if ! grep -q "bcm2835-v4l2" /etc/modules; then
-        echo "bcm2835-v4l2" | sudo tee -a /etc/modules
-    fi
-    
-    # Load the module immediately
-    sudo modprobe bcm2835-v4l2
-    
-    # Wait for device
-    sleep 2
-    
-    # Test camera access
-    if ! v4l2-ctl --list-devices | grep -q "bcm2835-v4l2"; then
-        error "Camera device not found"
-        return 1
-    fi
-    
-    return 0
-}
-
-# Function to verify camera access
+# Function to verify camera
 verify_camera() {
     log "Verifying camera access..."
     
-    # Check for video devices
-    if ! ls /dev/video* >/dev/null 2>&1; then
-        warning "No video devices found"
+    if ! v4l2-ctl --list-devices > /dev/null 2>&1; then
+        error "No video devices found"
         return 1
     fi
     
-    # Check permissions
-    for device in /dev/video*; do
-        if [ -e "$device" ]; then
-            if [ ! -r "$device" ] || [ ! -w "$device" ]; then
-                log "Fixing permissions for $device"
-                chmod 666 "$device"
-            fi
-        fi
-    done
-    
-    # List available devices
-    log "Available video devices:"
-    ls -l /dev/video*
-    
+    info "Camera verification successful"
     return 0
 }
 
 # Main installation function
 main() {
-    log "Starting installation..."
+    log "Starting installation for Raspberry Pi 5..."
     
     # Check if running as root
     check_root
     
     # Install system dependencies
-    install_system_deps
+    install_system_deps || {
+        error "Failed to install system dependencies"
+        exit 1
+    }
     
     # Install Python packages
-    install_python_packages
+    install_python_packages || {
+        error "Failed to install Python packages"
+        exit 1
+    }
+    
+    # Verify Python packages
+    verify_python_packages || {
+        error "Python package verification failed"
+        exit 1
+    }
     
     # Create directory structure
-    create_directories
+    create_directories || {
+        error "Failed to create directories"
+        exit 1
+    }
     
     # Set up configuration
-    setup_config
+    setup_config || {
+        error "Failed to set up configuration"
+        exit 1
+    }
     
-    # Verify camera access
-    verify_camera
+    # Verify camera
+    verify_camera || {
+        warning "Camera verification failed - please check your camera connection"
+    }
     
     log "Installation completed successfully!"
-    echo ""
-    echo -e "${GREEN}=== Next Steps ===${NC}"
-    echo "1. Reboot system:    sudo reboot"
-    echo "2. View logs:        tail -f /var/log/facial-recognition/system.log"
-    echo ""
-    echo -e "${YELLOW}Note: System reboot required to apply all changes${NC}"
-    echo -e "${GREEN}Video feed will appear automatically after logging in${NC}"
-    echo -e "${YELLOW}To start manually: /usr/local/bin/start-facial-recognition${NC}"
+    log "You can now run the system with: python3 face_recognition.py"
 }
 
 # Run main installation
