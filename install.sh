@@ -38,8 +38,27 @@ install_system_deps() {
         python3-venv \
         python3-setuptools \
         python3-opencv \
+        v4l-utils \
         espeak \
         || true
+
+    # Fix video device permissions
+    log "Setting up video device permissions..."
+    
+    # Add video group if it doesn't exist
+    if ! getent group video >/dev/null; then
+        groupadd video
+    fi
+    
+    # Add user to video group
+    usermod -a -G video $SUDO_USER
+    
+    # Set permissions for video devices
+    for device in /dev/video*; do
+        if [ -e "$device" ]; then
+            chmod 666 "$device"
+        fi
+    done
 }
 
 # Function to set up Python virtual environment
@@ -154,6 +173,13 @@ export XAUTHORITY=/home/$USER/.Xauthority
 
 # Change to installation directory
 cd /home/$USER/code/pi-greeting-system
+
+# Fix video permissions if needed
+for device in /dev/video*; do
+    if [ -e "$device" ]; then
+        sudo chmod 666 "$device"
+    fi
+done
 
 # Activate virtual environment
 source venv/bin/activate
@@ -579,6 +605,33 @@ configure_camera() {
     return 0
 }
 
+# Function to verify camera access
+verify_camera() {
+    log "Verifying camera access..."
+    
+    # Check for video devices
+    if ! ls /dev/video* >/dev/null 2>&1; then
+        warning "No video devices found"
+        return 1
+    fi
+    
+    # Check permissions
+    for device in /dev/video*; do
+        if [ -e "$device" ]; then
+            if [ ! -r "$device" ] || [ ! -w "$device" ]; then
+                log "Fixing permissions for $device"
+                chmod 666 "$device"
+            fi
+        fi
+    done
+    
+    # List available devices
+    log "Available video devices:"
+    ls -l /dev/video*
+    
+    return 0
+}
+
 # Main installation function
 main() {
     log "Starting installation..."
@@ -599,10 +652,8 @@ main() {
     # Create autostart entry
     create_autostart
     
-    # Verify installation
-    if ! verify_installation; then
-        warning "Some components may not have installed correctly"
-    fi
+    # Verify camera access
+    verify_camera
     
     log "Installation completed!"
     echo ""

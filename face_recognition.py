@@ -96,28 +96,44 @@ class FacialRecognitionSystem:
             setattr(self, dir_name, dir_path)
     
     def setup_camera(self):
-        """Initialize and configure camera subsystem"""
-        # Try all possible camera indices
-        for i in range(10):  # Try indices 0-9
-            self.logger.info(f"Trying camera index {i}")
-            self.camera = cv2.VideoCapture(i)
-            if self.camera.isOpened():
-                ret, test_frame = self.camera.read()
-                if ret and test_frame is not None:
-                    self.logger.info(f"Successfully opened camera at index {i}")
-                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    self.camera.set(cv2.CAP_PROP_FPS, 30)
-                    
-                    # Create window
-                    cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
-                    cv2.moveWindow('Facial Recognition System', 0, 0)
-                    return
+        """Initialize camera with proper USB webcam device"""
+        # Try both video0 and video1 for USB webcam
+        usb_devices = ['/dev/video0', '/dev/video1']
+        
+        for device in usb_devices:
+            try:
+                self.logger.info(f"Trying USB camera device: {device}")
+                self.camera = cv2.VideoCapture(device)
+                if self.camera.isOpened():
+                    # Test frame capture
+                    ret, frame = self.camera.read()
+                    if ret and frame is not None:
+                        self.logger.info(f"Successfully opened camera on {device}")
+                        # Set camera properties
+                        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        self.camera.set(cv2.CAP_PROP_FPS, 30)
+                        self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)  # Enable autofocus
+                        self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
+                        
+                        # Create window
+                        cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
+                        cv2.moveWindow('Facial Recognition System', 0, 0)
+                        return
+                    else:
+                        self.logger.warning(f"Could not read frame from {device}")
+                        self.camera.release()
                 else:
+                    self.logger.warning(f"Could not open {device}")
+            except Exception as e:
+                self.logger.error(f"Error trying {device}: {str(e)}")
+                if hasattr(self, 'camera'):
                     self.camera.release()
         
-        # If we get here, no camera was found
-        self.logger.error("No working camera found!")
+        # If we get here, no camera worked
+        self.logger.error("Could not initialize any USB camera!")
+        self.logger.error("Available devices:")
+        os.system("ls -l /dev/video*")
         sys.exit(1)
     
     def setup_audio(self):
@@ -219,19 +235,21 @@ class FacialRecognitionSystem:
             self.tts_queue.put(message)
     
     def get_frame(self):
-        """Get frame from camera"""
+        """Get frame from camera with error recovery"""
         if not hasattr(self, 'camera') or not self.camera.isOpened():
             self.logger.error("Camera not initialized or closed")
             return False, None
             
-        ret, frame = self.camera.read()
-        if not ret:
+        for _ in range(3):  # Try up to 3 times
+            ret, frame = self.camera.read()
+            if ret and frame is not None:
+                return True, frame
             self.logger.warning("Failed to capture frame, retrying...")
-            # Try to reinitialize camera
-            self.camera.release()
-            self.setup_camera()
-            return False, None
-        return True, frame
+            time.sleep(0.1)  # Short delay between retries
+            
+        # If we get here, all retries failed
+        self.logger.error("Failed to capture frame after 3 attempts")
+        return False, None
     
     def process_frame(self, frame):
         """Process a single frame"""
