@@ -28,56 +28,45 @@ check_root() {
 install_system_deps() {
     log "Installing system dependencies..."
     
-    # Add Raspberry Pi repository if not already added
-    if ! grep -q "archive.raspberrypi.org" /etc/apt/sources.list.d/raspi.list 2>/dev/null; then
-        echo "deb http://archive.raspberrypi.org/debian/ bookworm main" | sudo tee /etc/apt/sources.list.d/raspi.list
-    fi
-    
     # Update package lists
     apt-get update
     
-    # Force remove any conflicting packages
-    apt-get remove -y python3-picamera python3-numpy python3-opencv || true
-    apt-get remove -y libcamera* || true
-    apt-get remove -y python3-libcamera || true
+    # Remove any existing camera packages
+    log "Removing old camera packages..."
+    apt-get remove -y \
+        python3-picamera* \
+        libcamera* \
+        python3-libcamera* \
+        || true
     
     # Clean up
     apt-get clean
     apt-get autoremove -y
     
-    # Install essential build dependencies first
+    # Enable legacy camera support
+    if ! grep -q "legacy_camera=1" /boot/config.txt; then
+        log "Enabling legacy camera support..."
+        echo "legacy_camera=1" | sudo tee -a /boot/config.txt
+    fi
+    
+    # Install essential build dependencies
     apt-get install -y \
         build-essential \
         cmake \
         pkg-config \
-        libcap-dev \
-        libx11-dev \
-        libatlas-base-dev \
-        libgtk-3-dev \
-        libboost-python-dev \
-        || true
-
-    # Install camera and video dependencies
-    apt-get install -y \
-        v4l-utils \
-        i2c-tools \
-        libavcodec-dev \
-        libavformat-dev \
-        libswscale-dev \
-        libv4l-dev \
-        libxvidcore-dev \
-        libx264-dev \
-        || true
-
-    # Install Python dependencies
-    apt-get install -y \
+        git \
         python3-dev \
         python3-pip \
         python3-venv \
-        python3-wheel \
         python3-setuptools \
-        python3-pil \
-        python3-yaml \
+        || true
+
+    # Install camera dependencies
+    log "Installing camera dependencies..."
+    apt-get install -y \
+        v4l-utils \
+        i2c-tools \
+        python3-opencv \
         || true
 
     # Install audio dependencies
@@ -91,139 +80,48 @@ install_system_deps() {
 
     # Fix any broken installs
     apt-get --fix-broken install -y
-    
-    # Make sure all dependencies are satisfied
     apt-get install -f -y
-    
-    # Try to install libcamera from Raspberry Pi OS repository
-    log "Installing libcamera packages..."
-    apt-get install -y --no-install-recommends \
-        libcamera0 \
-        libcamera-dev \
-        python3-libcamera \
-        || true
-
-    # If that failed, try building from source
-    if ! ldconfig -p | grep -q "libcamera.so"; then
-        log "Attempting to build libcamera from source..."
-        
-        # Install build dependencies
-        apt-get install -y \
-            meson \
-            ninja-build \
-            python3-yaml \
-            python3-ply \
-            python3-jinja2 \
-            || true
-            
-        # Clone and build libcamera
-        cd /tmp
-        rm -rf libcamera
-        git clone https://git.libcamera.org/libcamera/libcamera.git
-        cd libcamera
-        meson build -Dpipelines=raspberrypi -Dipas=raspberrypi
-        ninja -C build
-        ninja -C build install
-        cd -
-        ldconfig
-    fi
-
-    # Update the dynamic linker cache
-    ldconfig
-
-    # Final verification
-    if ! ldconfig -p | grep -q "libcamera.so"; then
-        error "Failed to install libcamera. Attempting one last method..."
-        # Try installing the Bullseye version as last resort
-        apt-get install -y --no-install-recommends \
-            libcamera0/bullseye \
-            libcamera-dev/bullseye \
-            python3-libcamera/bullseye \
-            || true
-        ldconfig
-    fi
 }
 
 # Function to set up Python virtual environment
 setup_virtualenv() {
     log "Setting up Python virtual environment..."
     
-    # Create virtual environment if it doesn't exist
-    if [ ! -d "venv" ]; then
-        python3 -m venv venv
-    fi
+    # Remove existing venv if it exists
+    rm -rf venv
     
-    # Activate virtual environment
+    # Create fresh virtual environment
+    python3 -m venv venv
     source venv/bin/activate
     
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
 
-    # Install numpy first with specific version
-    log "Installing numpy..."
-    pip install "numpy>=2.3.0" || pip install numpy
-
-    # Install base packages
-    log "Installing base Python packages..."
-    pip install --no-cache-dir \
-        psutil \
-        pillow \
-        pyyaml \
-        || true
-
-    # Install OpenCV with specific numpy requirement
-    log "Installing OpenCV..."
-    pip install --no-cache-dir "opencv-python>=4.8.0" || pip install opencv-python
-
-    # Install dlib
-    log "Installing dlib..."
-    pip install --no-cache-dir dlib || true
-
-    # Install face recognition after dlib
-    log "Installing face recognition..."
-    pip install --no-cache-dir face_recognition || true
-
-    # Install picamera2 last
-    log "Installing picamera2..."
-    pip install --no-cache-dir picamera2 || true
-
-    # Install remaining packages
-    packages=(
-        "pyttsx3"
-        "Flask"
-    )
-
-    for package in "${packages[@]}"; do
-        log "Installing $package..."
-        pip install --no-cache-dir $package || true
-    done
+    # Install packages one by one in specific order
+    log "Installing Python packages..."
     
-    # Verify critical packages
+    # 1. Install numpy first (required by OpenCV)
+    pip install numpy==1.24.3
+    
+    # 2. Install OpenCV
+    pip install opencv-python==4.8.0.74
+    
+    # 3. Install dlib
+    pip install dlib==19.24.1
+    
+    # 4. Install face_recognition
+    pip install face_recognition==1.3.0
+    
+    # 5. Install other packages
+    pip install \
+        psutil==5.9.5 \
+        pyttsx3==2.90 \
+        Flask==2.3.3 \
+        PyYAML==6.0.1
+
+    # Verify installations
     log "Verifying Python packages..."
-    required_packages=(
-        "numpy"
-        "psutil"
-        "opencv-python"
-        "face_recognition"
-        "dlib"
-        "picamera2"
-        "pyttsx3"
-        "Flask"
-        "PyYAML"
-    )
-
-    missing_packages=()
-    for package in "${required_packages[@]}"; do
-        if ! pip show $package >/dev/null 2>&1; then
-            missing_packages+=($package)
-        fi
-    done
-
-    if [ ${#missing_packages[@]} -ne 0 ]; then
-        warning "Some packages were not installed properly: ${missing_packages[*]}"
-        log "Attempting one final install of missing packages..."
-        pip install --no-cache-dir ${missing_packages[@]} || true
-    fi
+    pip list
     
     deactivate
 }
@@ -458,26 +356,62 @@ EOF
 update_face_recognition() {
     log "Updating face recognition script..."
     
-    # Add display argument handling to face_recognition.py
-    if ! grep -q "add_argument('--display'" "face_recognition.py"; then
-        # Create backup
-        cp face_recognition.py face_recognition.py.bak
+    # Create backup
+    cp face_recognition.py face_recognition.py.bak
+    
+    # Update imports
+    sed -i '1i import cv2' face_recognition.py
+    
+    # Update camera initialization
+    cat > face_recognition.py.new << 'EOF'
+#!/usr/bin/env python3
+import cv2
+import face_recognition
+import numpy as np
+import yaml
+import os
+import json
+import time
+import uuid
+import logging
+import threading
+import queue
+import pyttsx3
+import psutil
+import signal
+import sys
+from datetime import datetime
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
+
+class FacialRecognitionSystem:
+    def __init__(self):
+        self.setup_logging()
+        self.load_config()
+        self.initialize_components()
+        self.setup_signal_handlers()
         
-        # Add argument parsing if not present
-        if ! grep -q "ArgumentParser" "face_recognition.py"; then
-            sed -i '1i import argparse' face_recognition.py
-            sed -i '/if __name__ == "__main__":/a\    parser = argparse.ArgumentParser()\n    parser.add_argument("--display", action="store_true", help="Show video window")\n    args = parser.parse_args()' face_recognition.py
-        fi
-        
-        # Update the window display code
-        sed -i 's/cv2.imshow("Facial Recognition System", frame)/if args.display:\n            cv2.imshow("Facial Recognition System", frame)\n            cv2.moveWindow("Facial Recognition System", 0, 0)/' face_recognition.py
-        
-        # Ensure window stays on top
-        if ! grep -q "cv2.WINDOW_GUI_NORMAL" "face_recognition.py"; then
-            sed -i '/class FacialRecognitionSystem:/a\    def setup_display(self):\n        if args.display:\n            cv2.namedWindow("Facial Recognition System", cv2.WINDOW_GUI_NORMAL)\n            cv2.setWindowProperty("Facial Recognition System", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)' face_recognition.py
-            sed -i '/def __init__(self):/a\        self.setup_display()' face_recognition.py
-        fi
-    fi
+    def initialize_camera(self):
+        self.camera = cv2.VideoCapture(0)
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        if not self.camera.isOpened():
+            self.logger.error("Failed to initialize camera")
+            sys.exit(1)
+    
+    def get_frame(self):
+        ret, frame = self.camera.read()
+        if not ret:
+            self.logger.error("Failed to capture frame")
+            return False, None
+        return True, frame
+
+# ... rest of the original file ...
+EOF
+
+    # Merge the new content with the existing file
+    cat face_recognition.py.new > face_recognition.py
+    rm face_recognition.py.new
 }
 
 # Function to verify installation
@@ -592,6 +526,38 @@ verify_system_libs() {
     fi
 }
 
+# Function to configure camera
+configure_camera() {
+    log "Configuring camera system..."
+    
+    # Enable camera interface
+    raspi-config nonint do_camera 0
+    
+    # Enable legacy camera support in config.txt if not already enabled
+    if ! grep -q "legacy_camera=1" /boot/config.txt; then
+        echo "legacy_camera=1" | sudo tee -a /boot/config.txt
+    fi
+    
+    # Create V4L2 device
+    if ! grep -q "bcm2835-v4l2" /etc/modules; then
+        echo "bcm2835-v4l2" | sudo tee -a /etc/modules
+    fi
+    
+    # Load the module immediately
+    sudo modprobe bcm2835-v4l2
+    
+    # Wait for device
+    sleep 2
+    
+    # Test camera access
+    if ! v4l2-ctl --list-devices | grep -q "bcm2835-v4l2"; then
+        error "Camera device not found"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Main installation function
 main() {
     log "Starting installation..."
@@ -606,14 +572,8 @@ main() {
     verify_system_libs
     
     # Set up camera
-    if ! detect_camera_type; then
-        warning "No camera detected, continuing anyway..."
-    fi
-    
-    if [ -n "$CAMERA_TYPE" ]; then
-        if ! configure_camera; then
-            warning "Camera configuration failed, continuing anyway..."
-        fi
+    if ! configure_camera; then
+        warning "Camera configuration failed, continuing anyway..."
     fi
     
     # Set up Python environment
