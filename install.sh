@@ -30,14 +30,14 @@ install_system_deps() {
     
     # Add Raspberry Pi repository if not already added
     if ! grep -q "archive.raspberrypi.org" /etc/apt/sources.list.d/raspi.list 2>/dev/null; then
-        echo "deb http://archive.raspberrypi.org/debian/ bullseye main" | sudo tee /etc/apt/sources.list.d/raspi.list
+        echo "deb http://archive.raspberrypi.org/debian/ bookworm main" | sudo tee /etc/apt/sources.list.d/raspi.list
     fi
     
     # Update package lists
     apt-get update
     
     # Force remove any conflicting packages
-    apt-get remove -y python3-picamera || true
+    apt-get remove -y python3-picamera python3-numpy python3-opencv || true
     apt-get remove -y libcamera* || true
     apt-get remove -y python3-libcamera || true
     
@@ -55,23 +55,6 @@ install_system_deps() {
         libatlas-base-dev \
         libgtk-3-dev \
         libboost-python-dev \
-        || true
-
-    # Force install camera packages from Raspberry Pi repo
-    apt-get install -y --no-install-recommends \
-        libcamera0 \
-        libcamera-dev \
-        libcamera-tools \
-        python3-libcamera \
-        python3-picamera2 \
-        libcamera-apps-lite \
-        || true
-
-    # Double check libcamera installation
-    apt-get install -y --reinstall \
-        libcamera0 \
-        libcamera-dev \
-        python3-libcamera \
         || true
 
     # Install camera and video dependencies
@@ -93,9 +76,6 @@ install_system_deps() {
         python3-venv \
         python3-wheel \
         python3-setuptools \
-        python3-opencv \
-        python3-numpy \
-        python3-psutil \
         python3-pil \
         python3-yaml \
         || true
@@ -115,27 +95,52 @@ install_system_deps() {
     # Make sure all dependencies are satisfied
     apt-get install -f -y
     
-    # Update the dynamic linker cache
-    ldconfig
+    # Try to install libcamera from Raspberry Pi OS repository
+    log "Installing libcamera packages..."
+    apt-get install -y --no-install-recommends \
+        libcamera0 \
+        libcamera-dev \
+        python3-libcamera \
+        || true
 
-    # Verify libcamera installation
+    # If that failed, try building from source
     if ! ldconfig -p | grep -q "libcamera.so"; then
-        log "Attempting direct library installation..."
-        # Try direct installation from Raspberry Pi repo
-        wget https://archive.raspberrypi.org/debian/pool/main/libc/libcamera/libcamera0_0.0.5-1+rpt1_arm64.deb -O /tmp/libcamera0.deb || true
-        wget https://archive.raspberrypi.org/debian/pool/main/libc/libcamera/libcamera-dev_0.0.5-1+rpt1_arm64.deb -O /tmp/libcamera-dev.deb || true
-        dpkg -i /tmp/libcamera0.deb || true
-        dpkg -i /tmp/libcamera-dev.deb || true
-        apt-get install -f -y
-        rm -f /tmp/libcamera*.deb
+        log "Attempting to build libcamera from source..."
+        
+        # Install build dependencies
+        apt-get install -y \
+            meson \
+            ninja-build \
+            python3-yaml \
+            python3-ply \
+            python3-jinja2 \
+            || true
+            
+        # Clone and build libcamera
+        cd /tmp
+        rm -rf libcamera
+        git clone https://git.libcamera.org/libcamera/libcamera.git
+        cd libcamera
+        meson build -Dpipelines=raspberrypi -Dipas=raspberrypi
+        ninja -C build
+        ninja -C build install
+        cd -
         ldconfig
     fi
 
+    # Update the dynamic linker cache
+    ldconfig
+
     # Final verification
     if ! ldconfig -p | grep -q "libcamera.so"; then
-        error "Failed to install libcamera. System might need to be updated first."
-        error "Try running: sudo apt-get update && sudo apt-get upgrade -y"
-        error "Then run this script again."
+        error "Failed to install libcamera. Attempting one last method..."
+        # Try installing the Bullseye version as last resort
+        apt-get install -y --no-install-recommends \
+            libcamera0/bullseye \
+            libcamera-dev/bullseye \
+            python3-libcamera/bullseye \
+            || true
+        ldconfig
     fi
 }
 
@@ -154,48 +159,43 @@ setup_virtualenv() {
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
 
-    # Install base packages first
+    # Install numpy first with specific version
+    log "Installing numpy..."
+    pip install "numpy>=2.3.0" || pip install numpy
+
+    # Install base packages
     log "Installing base Python packages..."
     pip install --no-cache-dir \
-        numpy \
         psutil \
         pillow \
         pyyaml \
         || true
 
-    # Force reinstall picamera2 and dependencies
-    log "Installing camera packages..."
-    pip uninstall -y picamera2 libcamera || true
-    pip install --no-cache-dir --force-reinstall \
-        picamera2 \
-        || true
+    # Install OpenCV with specific numpy requirement
+    log "Installing OpenCV..."
+    pip install --no-cache-dir "opencv-python>=4.8.0" || pip install opencv-python
 
-    # Install dlib with custom flags
+    # Install dlib
     log "Installing dlib..."
-    pip install --no-cache-dir dlib --no-deps || {
-        warning "First dlib install attempt failed, trying with different options..."
-        pip install --no-cache-dir dlib
-    }
+    pip install --no-cache-dir dlib || true
 
-    # Install other packages one by one with retries
+    # Install face recognition after dlib
+    log "Installing face recognition..."
+    pip install --no-cache-dir face_recognition || true
+
+    # Install picamera2 last
+    log "Installing picamera2..."
+    pip install --no-cache-dir picamera2 || true
+
+    # Install remaining packages
     packages=(
-        "opencv-python"
-        "face_recognition"
         "pyttsx3"
         "Flask"
     )
 
     for package in "${packages[@]}"; do
         log "Installing $package..."
-        for i in {1..3}; do
-            if pip install --no-cache-dir $package; then
-                break
-            else
-                warning "Attempt $i to install $package failed, retrying..."
-                pip install --no-cache-dir --ignore-installed $package || true
-                sleep 1
-            fi
-        done
+        pip install --no-cache-dir $package || true
     done
     
     # Verify critical packages
