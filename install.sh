@@ -31,18 +31,6 @@ install_system_deps() {
     # Update package lists
     apt-get update
     
-    # Remove ALL camera packages
-    log "Removing old camera packages..."
-    apt-get remove -y \
-        python3-picamera* \
-        libcamera* \
-        python3-libcamera* \
-        || true
-    
-    # Clean up
-    apt-get clean
-    apt-get autoremove -y
-    
     # Install essential build dependencies
     apt-get install -y \
         build-essential \
@@ -53,13 +41,7 @@ install_system_deps() {
         python3-pip \
         python3-venv \
         python3-setuptools \
-        || true
-
-    # Install video dependencies
-    log "Installing video dependencies..."
-    apt-get install -y \
-        v4l-utils \
-        ffmpeg \
+        python3-opencv \
         || true
 
     # Install audio dependencies
@@ -93,29 +75,17 @@ setup_virtualenv() {
     # Install packages one by one in specific order
     log "Installing Python packages..."
     
-    # 1. Install numpy first (required by OpenCV)
-    pip install numpy==1.24.3
-    
-    # 2. Install OpenCV
-    pip install opencv-python==4.8.0.74
-    
-    # 3. Install dlib
-    pip install dlib==19.24.1
-    
-    # 4. Install face_recognition
-    pip install face_recognition==1.3.0
-    
-    # 5. Install other packages
+    # Install packages with exact versions that work
     pip install \
+        numpy==1.24.3 \
+        opencv-python==4.8.0.74 \
+        dlib==19.24.1 \
+        face_recognition==1.3.0 \
         psutil==5.9.5 \
         pyttsx3==2.90 \
         Flask==2.3.3 \
         PyYAML==6.0.1
 
-    # Verify installations
-    log "Verifying Python packages..."
-    pip list
-    
     deactivate
 }
 
@@ -162,30 +132,12 @@ recognition:
   min_face_size: 20
   blur_threshold: 100
 
-# Camera settings
-camera:
-  type: 'usb'
-  device: 0
-
-# Audio and greeting settings
-greeting:
-  enabled: true
-  volume: 0.8
-  cooldown: 30
-  language: 'en'
-  rate: 150
-  custom_greetings: {}
-
 # Storage settings
 storage:
   base_dir: 'data'
   known_faces_dir: 'data/known_faces'
   unknown_faces_dir: 'data/unknown_faces'
   logs_dir: 'data/logs'
-  max_unknown_age: 30
-  auto_clean: true
-  backup_enabled: true
-  backup_interval: 7
 EOF
         chown $SUDO_USER:$SUDO_USER config.yml
     fi
@@ -214,9 +166,6 @@ EOF
     # Create startup script
     cat > /usr/local/bin/start-facial-recognition << 'EOF'
 #!/bin/bash
-
-# Wait for desktop environment
-sleep 5
 
 # Set display
 export DISPLAY=:0
@@ -329,39 +278,28 @@ from logging.handlers import RotatingFileHandler
 
 class FacialRecognitionSystem:
     def __init__(self):
-        """Initialize system components"""
         self.setup_logging()
         self.load_config()
         self.initialize_components()
         self.setup_signal_handlers()
         
     def setup_logging(self):
-        """Configure logging with file and console handlers"""
         self.logger = logging.getLogger('FacialRecognition')
         self.logger.setLevel(logging.INFO)
         
         # File handler
         log_file = '/var/log/facial-recognition/system.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        file_handler = RotatingFileHandler(
-            log_file, 
-            maxBytes=10485760,  # 10MB
-            backupCount=5
-        )
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
+        file_handler = RotatingFileHandler(log_file, maxBytes=10485760, backupCount=5)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(file_handler)
         
         # Console handler
         console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter(
-            '%(levelname)s: %(message)s'
-        ))
+        console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         self.logger.addHandler(console_handler)
     
     def load_config(self):
-        """Load and parse system configuration from YAML"""
         try:
             with open('config.yml', 'r') as f:
                 self.config = yaml.safe_load(f)
@@ -371,67 +309,92 @@ class FacialRecognitionSystem:
             sys.exit(1)
     
     def initialize_components(self):
-        """Initialize core system components"""
         self.setup_storage()
         self.setup_camera()
         self.setup_audio()
         self.setup_face_recognition()
-        
-        # Initialize state variables
         self.running = True
         self.frame_times = []
         self.last_greeting_time = {}
         
     def setup_storage(self):
-        """Set up storage directories"""
         storage_config = self.config['storage']
         self.base_dir = Path(storage_config['base_dir'])
-        
-        # Create required directories
         for dir_name in ['known_faces_dir', 'unknown_faces_dir', 'logs_dir']:
             dir_path = Path(storage_config[dir_name])
             dir_path.mkdir(parents=True, exist_ok=True)
             setattr(self, dir_name, dir_path)
     
     def setup_camera(self):
-        """Initialize camera with OpenCV"""
-        try:
-            self.camera = cv2.VideoCapture(0)
-            if not self.camera.isOpened():
-                raise Exception("Could not open camera")
-            
-            # Set camera properties
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['recognition']['resolution'][0])
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['recognition']['resolution'][1])
-            self.camera.set(cv2.CAP_PROP_FPS, self.config['recognition']['frame_rate'])
-            
-            # Test camera
-            ret, _ = self.camera.read()
-            if not ret:
-                raise Exception("Could not read from camera")
-                
-            self.logger.info("Camera initialized successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize camera: {e}")
-            sys.exit(1)
+        self.camera = cv2.VideoCapture(0)
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.camera.set(cv2.CAP_PROP_FPS, 30)
+        
+        # Create window
+        cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
+        cv2.moveWindow('Facial Recognition System', 0, 0)
     
     def get_frame(self):
-        """Get frame from camera"""
         ret, frame = self.camera.read()
         if not ret:
-            self.logger.error("Failed to capture frame")
+            self.logger.warning("Failed to capture frame, retrying...")
             return False, None
         return True, frame
 
-    # ... rest of the original implementation ...
+    def run(self):
+        self.logger.info("Starting facial recognition system...")
+        
+        while self.running:
+            ret, frame = self.get_frame()
+            if not ret:
+                continue
+            
+            # Process frame for face detection
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame)
+            
+            # Draw rectangles around faces
+            for (top, right, bottom, left) in face_locations:
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            
+            # Display frame
+            cv2.imshow('Facial Recognition System', frame)
+            
+            # Handle key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+        
+        self.cleanup()
 
+    def cleanup(self):
+        self.camera.release()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    system = FacialRecognitionSystem()
+    system.run()
 EOF
 
-    # Update config.yml to remove picamera references
-    if [ -f "config.yml" ]; then
-        sed -i 's/type: "picamera"/type: "usb"/' config.yml
-        sed -i 's/device: "\/dev\/video0"/device: 0/' config.yml
-    fi
+    # Update config.yml
+    cat > config.yml << 'EOF'
+# Recognition settings
+recognition:
+  tolerance: 0.6
+  model: 'hog'
+  frame_rate: 30
+  resolution: [640, 480]
+  min_face_size: 20
+  blur_threshold: 100
+
+# Storage settings
+storage:
+  base_dir: 'data'
+  known_faces_dir: 'data/known_faces'
+  unknown_faces_dir: 'data/unknown_faces'
+  logs_dir: 'data/logs'
+EOF
 }
 
 # Function to verify installation
@@ -467,15 +430,6 @@ verify_installation() {
     if [ ! -f "/etc/systemd/system/facial-recognition-web.service" ]; then
         error "Web interface service not installed properly"
         errors=$((errors + 1))
-    fi
-    
-    # Check camera configuration
-    if [ -n "$CAMERA_DEV" ] && [ -n "$CAMERA_TYPE" ]; then
-        # Update config with detected camera
-        sed -i "s/type: 'usb'/type: '$CAMERA_TYPE'/" config.yml
-        sed -i "s|device: '/dev/video0'|device: '$CAMERA_DEV'|" config.yml
-    else
-        warning "Camera configuration not updated in config.yml"
     fi
     
     return $errors
@@ -628,7 +582,7 @@ main() {
     log "Installation completed!"
     echo ""
     echo -e "${GREEN}=== System Status ===${NC}"
-    echo "Camera: ${CAMERA_TYPE:-Unknown} (${CAMERA_DEV:-None})"
+    echo "Camera: $(v4l2-ctl --list-devices | grep -q "bcm2835-v4l2" && echo "Connected" || echo "Not Connected")"
     echo "Python: $(python3 --version)"
     echo "Web Service: $(systemctl is-active facial-recognition-web.service &>/dev/null && echo "Running" || echo "Failed")"
     echo "Display: Will start after login"
