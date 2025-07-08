@@ -72,21 +72,83 @@ setup_virtualenv() {
     python3 -m venv venv
     source venv/bin/activate
     
-    # Upgrade pip
-    pip install --upgrade pip wheel setuptools
+    # Upgrade pip and install build tools
+    pip install --upgrade pip wheel setuptools build
 
-    # Install packages
+    # Install system-level dependencies first
+    log "Installing system dependencies..."
+    sudo apt-get install -y \
+        cmake \
+        libopenblas-dev \
+        liblapack-dev \
+        libjpeg-dev \
+        || true
+
+    # Install numpy first
+    log "Installing numpy..."
+    pip install numpy==1.24.3
+
+    # Install dlib with specific version
+    log "Installing dlib..."
+    pip install dlib==19.24.1
+
+    # Install face_recognition dependencies
+    log "Installing face_recognition dependencies..."
     pip install \
-        numpy==1.24.3 \
+        Click>=6.0 \
+        pillow \
+        scipy>=0.17.0
+
+    # Install face_recognition
+    log "Installing face_recognition..."
+    pip install face_recognition==1.3.0
+
+    # Install remaining packages
+    log "Installing remaining packages..."
+    pip install \
         opencv-python==4.8.0.74 \
-        dlib==19.24.1 \
-        face_recognition==1.3.0 \
         psutil==5.9.5 \
         pyttsx3==2.90 \
         Flask==2.3.3 \
         PyYAML==6.0.1
 
+    # Verify face_recognition installation
+    log "Verifying face_recognition installation..."
+    if ! python3 -c "import face_recognition; print(face_recognition.__version__)" 2>/dev/null; then
+        error "face_recognition not installed properly"
+        # Try reinstalling
+        pip uninstall -y face_recognition
+        pip uninstall -y dlib
+        pip install dlib==19.24.1
+        pip install face_recognition==1.3.0
+    fi
+
     deactivate
+}
+
+# Function to verify_python_packages
+verify_python_packages() {
+    log "Verifying Python packages..."
+    source venv/bin/activate
+    
+    # Test face_recognition import
+    if python3 -c "import face_recognition; print('face_recognition available')" 2>/dev/null; then
+        info "face_recognition package verified"
+    else
+        error "face_recognition package not working"
+        return 1
+    fi
+    
+    # Test OpenCV import
+    if python3 -c "import cv2; print('OpenCV available')" 2>/dev/null; then
+        info "OpenCV package verified"
+    else
+        error "OpenCV package not working"
+        return 1
+    fi
+    
+    deactivate
+    return 0
 }
 
 # Function to create directory structure
@@ -641,6 +703,17 @@ main() {
     
     # Set up Python environment
     setup_virtualenv
+    
+    # Verify Python packages
+    if ! verify_python_packages; then
+        error "Python package verification failed"
+        log "Attempting to fix Python packages..."
+        setup_virtualenv
+        if ! verify_python_packages; then
+            error "Failed to fix Python packages"
+            exit 1
+        fi
+    fi
     
     # Create directory structure
     mkdir -p data/{known_faces,unknown_faces,logs}

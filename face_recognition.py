@@ -5,7 +5,6 @@ Core system module implementing real-time face detection, recognition, and voice
 """
 
 import cv2
-import face_recognition
 import numpy as np
 import yaml
 import os
@@ -23,8 +22,16 @@ from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from PIL import Image
-import picamera2
 from cryptography.fernet import Fernet
+
+# Face recognition imports
+from face_recognition import (
+    load_image_file,
+    face_locations,
+    face_encodings,
+    compare_faces,
+    face_distance
+)
 
 class FacialRecognitionSystem:
     def __init__(self):
@@ -96,45 +103,91 @@ class FacialRecognitionSystem:
             setattr(self, dir_name, dir_path)
     
     def setup_camera(self):
-        """Initialize camera with proper USB webcam device"""
-        # Try both video0 and video1 for USB webcam
-        usb_devices = ['/dev/video0', '/dev/video1']
+        """Initialize camera with support for both USB webcam and Arducam IMX519"""
+        self.using_picamera = self.config['camera']['type'] == 'picamera'
         
-        for device in usb_devices:
+        if self.using_picamera:
             try:
-                self.logger.info(f"Trying USB camera device: {device}")
-                self.camera = cv2.VideoCapture(device)
-                if self.camera.isOpened():
-                    # Test frame capture
-                    ret, frame = self.camera.read()
-                    if ret and frame is not None:
-                        self.logger.info(f"Successfully opened camera on {device}")
-                        # Set camera properties
-                        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                        self.camera.set(cv2.CAP_PROP_FPS, 30)
-                        self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)  # Enable autofocus
-                        self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
-                        
-                        # Create window
-                        cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
-                        cv2.moveWindow('Facial Recognition System', 0, 0)
-                        return
-                    else:
-                        self.logger.warning(f"Could not read frame from {device}")
-                        self.camera.release()
-                else:
-                    self.logger.warning(f"Could not open {device}")
+                self.logger.info("Initializing Picamera2 for Arducam IMX519...")
+                self.camera = Picamera2()
+                
+                # Configure camera for IMX519
+                sensor_mode = self.config['camera']['sensor_mode']
+                resolution = self.config['recognition']['resolution']
+                
+                # Create a camera configuration
+                config = self.camera.create_still_configuration(
+                    main={"size": resolution},
+                    raw={"size": resolution},
+                    controls={
+                        "FrameDurationLimits": (33333, 33333),  # For 30fps
+                        "AnalogueGain": 1.0,
+                        "ColourGains": (1.0, 1.0),
+                        "AeEnable": True,
+                        "AwbEnable": True,
+                        "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality
+                    }
+                )
+                
+                # Apply configuration
+                self.camera.configure(config)
+                
+                # Set additional camera properties
+                self.camera.set_controls({
+                    "Brightness": self.config['camera']['brightness'] / 100.0,
+                    "Contrast": self.config['camera']['contrast'] / 100.0,
+                })
+                
+                # Start the camera
+                self.camera.start()
+                time.sleep(2)  # Allow camera to warm up
+                
+                self.logger.info("Picamera2 initialized successfully")
+                
             except Exception as e:
-                self.logger.error(f"Error trying {device}: {str(e)}")
-                if hasattr(self, 'camera'):
-                    self.camera.release()
+                self.logger.error(f"Failed to initialize Picamera2: {e}")
+                self.logger.warning("Falling back to USB camera...")
+                self.using_picamera = False
         
-        # If we get here, no camera worked
-        self.logger.error("Could not initialize any USB camera!")
-        self.logger.error("Available devices:")
-        os.system("ls -l /dev/video*")
-        sys.exit(1)
+        if not self.using_picamera:
+            # Try both video0 and video1 for USB webcam
+            usb_devices = ['/dev/video0', '/dev/video1']
+            
+            for device in usb_devices:
+                try:
+                    self.logger.info(f"Trying USB camera device: {device}")
+                    self.camera = cv2.VideoCapture(device)
+                    if self.camera.isOpened():
+                        # Test frame capture
+                        ret, frame = self.camera.read()
+                        if ret and frame is not None:
+                            self.logger.info(f"Successfully opened camera on {device}")
+                            # Set camera properties
+                            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['recognition']['resolution'][0])
+                            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['recognition']['resolution'][1])
+                            self.camera.set(cv2.CAP_PROP_FPS, self.config['recognition']['frame_rate'])
+                            self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+                            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                            
+                            # Create window
+                            cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
+                            cv2.moveWindow('Facial Recognition System', 0, 0)
+                            return
+                        else:
+                            self.logger.warning(f"Could not read frame from {device}")
+                            self.camera.release()
+                    else:
+                        self.logger.warning(f"Could not open {device}")
+                except Exception as e:
+                    self.logger.error(f"Error trying {device}: {str(e)}")
+                    if hasattr(self, 'camera'):
+                        self.camera.release()
+            
+            # If we get here, no camera worked
+            self.logger.error("Could not initialize any camera!")
+            self.logger.error("Available devices:")
+            os.system("ls -l /dev/video*")
+            sys.exit(1)
     
     def setup_audio(self):
         """Initialize text-to-speech synthesis engine"""
@@ -198,8 +251,8 @@ class FacialRecognitionSystem:
                     self.logger.debug(f"Loading face for: {name}")
                     
                     # Load and process face
-                    image = face_recognition.load_image_file(str(face_file))
-                    face_encodings = face_recognition.face_encodings(image)
+                    image = load_image_file(str(face_file))
+                    face_encodings = face_encodings(image)
                     
                     if face_encodings:
                         face_encoding = face_encodings[0]
@@ -236,20 +289,32 @@ class FacialRecognitionSystem:
     
     def get_frame(self):
         """Get frame from camera with error recovery"""
-        if not hasattr(self, 'camera') or not self.camera.isOpened():
-            self.logger.error("Camera not initialized or closed")
+        if self.using_picamera:
+            try:
+                # Capture frame from Picamera2
+                frame = self.camera.capture_array()
+                if frame is not None:
+                    # Convert frame to RGB format
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    return True, frame
+            except Exception as e:
+                self.logger.error(f"Picamera2 capture error: {e}")
+                return False, None
+        else:
+            if not hasattr(self, 'camera') or not self.camera.isOpened():
+                self.logger.error("Camera not initialized or closed")
+                return False, None
+                
+            for _ in range(3):  # Try up to 3 times
+                ret, frame = self.camera.read()
+                if ret and frame is not None:
+                    return True, frame
+                self.logger.warning("Failed to capture frame, retrying...")
+                time.sleep(0.1)  # Short delay between retries
+                
+            # If we get here, all retries failed
+            self.logger.error("Failed to capture frame after 3 attempts")
             return False, None
-            
-        for _ in range(3):  # Try up to 3 times
-            ret, frame = self.camera.read()
-            if ret and frame is not None:
-                return True, frame
-            self.logger.warning("Failed to capture frame, retrying...")
-            time.sleep(0.1)  # Short delay between retries
-            
-        # If we get here, all retries failed
-        self.logger.error("Failed to capture frame after 3 attempts")
-        return False, None
     
     def process_frame(self, frame):
         """Process a single frame"""
@@ -257,7 +322,7 @@ class FacialRecognitionSystem:
         rgb_frame = frame if self.using_picamera else cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Find faces in frame
-        face_locations = face_recognition.face_locations(
+        face_locations = face_locations(
             rgb_frame,
             model=self.config['recognition']['model']
         )
@@ -266,7 +331,7 @@ class FacialRecognitionSystem:
             return frame
         
         # Get face encodings
-        face_encodings = face_recognition.face_encodings(
+        face_encodings = face_encodings(
             rgb_frame,
             face_locations,
             num_jitters=1  # Increase for better accuracy, but slower
@@ -287,14 +352,14 @@ class FacialRecognitionSystem:
         if self.config['security']['encrypt_faces']:
             face_encoding = self.encrypt_encoding(face_encoding)
         
-        matches = face_recognition.compare_faces(
+        matches = compare_faces(
             self.known_face_encodings,
             face_encoding,
             tolerance=self.config['recognition']['tolerance']
         )
         
         if True in matches:
-            face_distances = face_recognition.face_distance(
+            face_distances = face_distance(
                 self.known_face_encodings,
                 face_encoding
             )
