@@ -24,23 +24,6 @@ check_root() {
     fi
 }
 
-# Function to setup repositories
-setup_repositories() {
-    log "Setting up package repositories..."
-    
-    # Add Pi repository key
-    curl -fsSL https://archive.raspberrypi.org/debian/raspberrypi.gpg.key | gpg --dearmor -o /usr/share/keyrings/raspberrypi-archive-keyring.gpg
-    
-    # Add Pi repository
-    echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list
-    
-    # Add pip repository for face_recognition
-    echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list.d/debian.list
-    
-    # Update package lists
-    apt-get update
-}
-
 # Function to fix dpkg
 fix_dpkg() {
     log "Fixing dpkg state..."
@@ -56,16 +39,13 @@ fix_dpkg() {
     mkdir -p /var/lib/dpkg/updates
     mkdir -p /var/lib/apt/lists/partial
     mkdir -p /var/cache/apt/archives/partial
+    mkdir -p /var/lib/dpkg/info
     
     # Fix ssh.list
-    mkdir -p /var/lib/dpkg/info
     touch /var/lib/dpkg/status
     touch /var/lib/dpkg/available
-    
-    # Create empty ssh.list if it doesn't exist
-    if [ ! -f "/var/lib/dpkg/info/ssh.list" ]; then
-        echo "" > /var/lib/dpkg/info/ssh.list
-    fi
+    echo "" > /var/lib/dpkg/info/ssh.list
+    chmod 644 /var/lib/dpkg/info/ssh.list
     
     # Fix package system
     dpkg --configure -a || true
@@ -115,10 +95,25 @@ install_system_deps() {
         espeak \
         || true
 
-    # Install dlib and face_recognition via pip (more reliable than apt versions)
-    python3 -m pip install --break-system-packages \
-        dlib \
-        face_recognition
+    # Install dlib from source (more reliable)
+    log "Installing dlib from source..."
+    if [ ! -d "dlib" ]; then
+        git clone https://github.com/davisking/dlib.git
+    fi
+    cd dlib
+    python3 setup.py install --no
+    cd ..
+    rm -rf dlib
+
+    # Install face_recognition from source
+    log "Installing face_recognition from source..."
+    if [ ! -d "face_recognition" ]; then
+        git clone https://github.com/ageitgey/face_recognition.git
+    fi
+    cd face_recognition
+    python3 setup.py install
+    cd ..
+    rm -rf face_recognition
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -259,12 +254,15 @@ EOF
 verify_camera() {
     log "Verifying camera access..."
     
-    if ! v4l2-ctl --list-devices > /dev/null 2>&1; then
+    # Check for video devices directly since v4l2-ctl might not be available
+    if ! ls /dev/video* >/dev/null 2>&1; then
         warning "No video devices found - please check camera connection"
         return 1
     fi
     
     info "Camera verification successful"
+    info "Found video devices:"
+    ls -l /dev/video*
     return 0
 }
 
@@ -274,9 +272,6 @@ main() {
     
     # Check if running as root
     check_root
-    
-    # Setup repositories first
-    setup_repositories
     
     # Fix dpkg state
     fix_dpkg
