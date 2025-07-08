@@ -28,8 +28,22 @@ check_root() {
 install_system_deps() {
     log "Installing system dependencies..."
     
+    # Add Raspberry Pi repository if not already added
+    if ! grep -q "archive.raspberrypi.org" /etc/apt/sources.list.d/raspi.list 2>/dev/null; then
+        echo "deb http://archive.raspberrypi.org/debian/ bullseye main" | sudo tee /etc/apt/sources.list.d/raspi.list
+    fi
+    
     # Update package lists
     apt-get update
+    
+    # Force remove any conflicting packages
+    apt-get remove -y python3-picamera || true
+    apt-get remove -y libcamera* || true
+    apt-get remove -y python3-libcamera || true
+    
+    # Clean up
+    apt-get clean
+    apt-get autoremove -y
     
     # Install essential build dependencies first
     apt-get install -y \
@@ -43,6 +57,23 @@ install_system_deps() {
         libboost-python-dev \
         || true
 
+    # Force install camera packages from Raspberry Pi repo
+    apt-get install -y --no-install-recommends \
+        libcamera0 \
+        libcamera-dev \
+        libcamera-tools \
+        python3-libcamera \
+        python3-picamera2 \
+        libcamera-apps-lite \
+        || true
+
+    # Double check libcamera installation
+    apt-get install -y --reinstall \
+        libcamera0 \
+        libcamera-dev \
+        python3-libcamera \
+        || true
+
     # Install camera and video dependencies
     apt-get install -y \
         v4l-utils \
@@ -53,18 +84,6 @@ install_system_deps() {
         libv4l-dev \
         libxvidcore-dev \
         libx264-dev \
-        libgtk-3-dev \
-        || true
-
-    # Install libcamera and related packages
-    apt-get install -y \
-        libcamera0 \
-        libcamera-dev \
-        libcamera-tools \
-        python3-libcamera \
-        python3-picamera2 \
-        libcamera-apps \
-        libcamera-apps-lite \
         || true
 
     # Install Python dependencies
@@ -75,12 +94,10 @@ install_system_deps() {
         python3-wheel \
         python3-setuptools \
         python3-opencv \
-        python3-picamera2 \
         python3-numpy \
         python3-psutil \
         python3-pil \
         python3-yaml \
-        python3-libcamera \
         || true
 
     # Install audio dependencies
@@ -100,6 +117,26 @@ install_system_deps() {
     
     # Update the dynamic linker cache
     ldconfig
+
+    # Verify libcamera installation
+    if ! ldconfig -p | grep -q "libcamera.so"; then
+        log "Attempting direct library installation..."
+        # Try direct installation from Raspberry Pi repo
+        wget https://archive.raspberrypi.org/debian/pool/main/libc/libcamera/libcamera0_0.0.5-1+rpt1_arm64.deb -O /tmp/libcamera0.deb || true
+        wget https://archive.raspberrypi.org/debian/pool/main/libc/libcamera/libcamera-dev_0.0.5-1+rpt1_arm64.deb -O /tmp/libcamera-dev.deb || true
+        dpkg -i /tmp/libcamera0.deb || true
+        dpkg -i /tmp/libcamera-dev.deb || true
+        apt-get install -f -y
+        rm -f /tmp/libcamera*.deb
+        ldconfig
+    fi
+
+    # Final verification
+    if ! ldconfig -p | grep -q "libcamera.so"; then
+        error "Failed to install libcamera. System might need to be updated first."
+        error "Try running: sudo apt-get update && sudo apt-get upgrade -y"
+        error "Then run this script again."
+    fi
 }
 
 # Function to set up Python virtual environment
@@ -126,11 +163,11 @@ setup_virtualenv() {
         pyyaml \
         || true
 
-    # Install libcamera and picamera2 first
+    # Force reinstall picamera2 and dependencies
     log "Installing camera packages..."
-    pip install --no-cache-dir \
+    pip uninstall -y picamera2 libcamera || true
+    pip install --no-cache-dir --force-reinstall \
         picamera2 \
-        libcamera \
         || true
 
     # Install dlib with custom flags
@@ -170,7 +207,6 @@ setup_virtualenv() {
         "face_recognition"
         "dlib"
         "picamera2"
-        "libcamera"
         "pyttsx3"
         "Flask"
         "PyYAML"
