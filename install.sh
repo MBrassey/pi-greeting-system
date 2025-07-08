@@ -31,7 +31,7 @@ install_system_deps() {
     # Update package lists
     apt-get update
     
-    # Remove any existing camera packages
+    # Remove ALL camera packages
     log "Removing old camera packages..."
     apt-get remove -y \
         python3-picamera* \
@@ -42,12 +42,6 @@ install_system_deps() {
     # Clean up
     apt-get clean
     apt-get autoremove -y
-    
-    # Enable legacy camera support
-    if ! grep -q "legacy_camera=1" /boot/config.txt; then
-        log "Enabling legacy camera support..."
-        echo "legacy_camera=1" | sudo tee -a /boot/config.txt
-    fi
     
     # Install essential build dependencies
     apt-get install -y \
@@ -61,12 +55,11 @@ install_system_deps() {
         python3-setuptools \
         || true
 
-    # Install camera dependencies
-    log "Installing camera dependencies..."
+    # Install video dependencies
+    log "Installing video dependencies..."
     apt-get install -y \
         v4l-utils \
-        i2c-tools \
-        python3-opencv \
+        ffmpeg \
         || true
 
     # Install audio dependencies
@@ -160,23 +153,19 @@ setup_config() {
     
     if [ ! -f "config.yml" ]; then
         cat > config.yml << 'EOF'
-# Raspberry Pi Facial Recognition System Configuration
-
 # Recognition settings
 recognition:
   tolerance: 0.6
   model: 'hog'
   frame_rate: 30
-  resolution: [1280, 720]
+  resolution: [640, 480]
   min_face_size: 20
   blur_threshold: 100
 
 # Camera settings
 camera:
-  type: 'usb'  # Will be updated by install script
-  device: '/dev/video0'  # Will be updated by install script
-  brightness: 50
-  contrast: 50
+  type: 'usb'
+  device: 0
 
 # Audio and greeting settings
 greeting:
@@ -197,36 +186,8 @@ storage:
   auto_clean: true
   backup_enabled: true
   backup_interval: 7
-
-# Web interface settings
-web_interface:
-  enabled: true
-  host: '0.0.0.0'
-  port: 8080
-  ssl_enabled: false
-  ssl_cert: 'ssl/cert.pem'
-  ssl_key: 'ssl/key.pem'
-  username: 'admin'
-  password_hash: ''  # Will be set on first run
-
-# Security settings
-security:
-  encrypt_faces: false
-  encryption_key: ''  # Will be set on first run
-  allowed_ips: []
-  session_timeout: 3600
-  max_login_attempts: 5
-  lockout_duration: 300
-
-# Performance settings
-performance:
-  max_processes: 4
-  batch_size: 32
-  gpu_enabled: false
-  optimize_for: 'balanced'
 EOF
         chown $SUDO_USER:$SUDO_USER config.yml
-        chmod 644 config.yml
     fi
 }
 
@@ -250,12 +211,12 @@ X-GNOME-Autostart-enabled=true
 StartupNotify=true
 EOF
     
-    # Create startup script in /usr/local/bin
+    # Create startup script
     cat > /usr/local/bin/start-facial-recognition << 'EOF'
 #!/bin/bash
 
-# Wait for desktop environment to be fully loaded
-sleep 15
+# Wait for desktop environment
+sleep 5
 
 # Set display
 export DISPLAY=:0
@@ -264,26 +225,11 @@ export XAUTHORITY=/home/$USER/.Xauthority
 # Change to installation directory
 cd /home/$USER/code/pi-greeting-system
 
-# Ensure virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "Error: Virtual environment not found!"
-    exit 1
-fi
-
-# Activate virtual environment and run
+# Activate virtual environment
 source venv/bin/activate
 
-# Verify required packages
-for package in face_recognition psutil opencv-python; do
-    if ! pip show $package >/dev/null 2>&1; then
-        echo "Error: Required package $package not found!"
-        deactivate
-        exit 1
-    fi
-done
-
 # Run the facial recognition system
-python3 face_recognition.py --display
+python3 face_recognition.py
 
 # Deactivate virtual environment
 deactivate
@@ -359,11 +305,8 @@ update_face_recognition() {
     # Create backup
     cp face_recognition.py face_recognition.py.bak
     
-    # Update imports
-    sed -i '1i import cv2' face_recognition.py
-    
-    # Update camera initialization
-    cat > face_recognition.py.new << 'EOF'
+    # Create new version of the script
+    cat > face_recognition.py << 'EOF'
 #!/usr/bin/env python3
 import cv2
 import face_recognition
@@ -386,32 +329,109 @@ from logging.handlers import RotatingFileHandler
 
 class FacialRecognitionSystem:
     def __init__(self):
+        """Initialize system components"""
         self.setup_logging()
         self.load_config()
         self.initialize_components()
         self.setup_signal_handlers()
         
-    def initialize_camera(self):
-        self.camera = cv2.VideoCapture(0)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        if not self.camera.isOpened():
-            self.logger.error("Failed to initialize camera")
+    def setup_logging(self):
+        """Configure logging with file and console handlers"""
+        self.logger = logging.getLogger('FacialRecognition')
+        self.logger.setLevel(logging.INFO)
+        
+        # File handler
+        log_file = '/var/log/facial-recognition/system.log'
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_file, 
+            maxBytes=10485760,  # 10MB
+            backupCount=5
+        )
+        file_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        self.logger.addHandler(file_handler)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(
+            '%(levelname)s: %(message)s'
+        ))
+        self.logger.addHandler(console_handler)
+    
+    def load_config(self):
+        """Load and parse system configuration from YAML"""
+        try:
+            with open('config.yml', 'r') as f:
+                self.config = yaml.safe_load(f)
+            self.logger.info("Configuration loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to load config: {e}")
+            sys.exit(1)
+    
+    def initialize_components(self):
+        """Initialize core system components"""
+        self.setup_storage()
+        self.setup_camera()
+        self.setup_audio()
+        self.setup_face_recognition()
+        
+        # Initialize state variables
+        self.running = True
+        self.frame_times = []
+        self.last_greeting_time = {}
+        
+    def setup_storage(self):
+        """Set up storage directories"""
+        storage_config = self.config['storage']
+        self.base_dir = Path(storage_config['base_dir'])
+        
+        # Create required directories
+        for dir_name in ['known_faces_dir', 'unknown_faces_dir', 'logs_dir']:
+            dir_path = Path(storage_config[dir_name])
+            dir_path.mkdir(parents=True, exist_ok=True)
+            setattr(self, dir_name, dir_path)
+    
+    def setup_camera(self):
+        """Initialize camera with OpenCV"""
+        try:
+            self.camera = cv2.VideoCapture(0)
+            if not self.camera.isOpened():
+                raise Exception("Could not open camera")
+            
+            # Set camera properties
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['recognition']['resolution'][0])
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['recognition']['resolution'][1])
+            self.camera.set(cv2.CAP_PROP_FPS, self.config['recognition']['frame_rate'])
+            
+            # Test camera
+            ret, _ = self.camera.read()
+            if not ret:
+                raise Exception("Could not read from camera")
+                
+            self.logger.info("Camera initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize camera: {e}")
             sys.exit(1)
     
     def get_frame(self):
+        """Get frame from camera"""
         ret, frame = self.camera.read()
         if not ret:
             self.logger.error("Failed to capture frame")
             return False, None
         return True, frame
 
-# ... rest of the original file ...
+    # ... rest of the original implementation ...
+
 EOF
 
-    # Merge the new content with the existing file
-    cat face_recognition.py.new > face_recognition.py
-    rm face_recognition.py.new
+    # Update config.yml to remove picamera references
+    if [ -f "config.yml" ]; then
+        sed -i 's/type: "picamera"/type: "usb"/' config.yml
+        sed -i 's/device: "\/dev\/video0"/device: 0/' config.yml
+    fi
 }
 
 # Function to verify installation
