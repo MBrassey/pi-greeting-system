@@ -28,16 +28,25 @@ check_root() {
 install_system_deps() {
     log "Installing system dependencies..."
     
-    # Update package lists
-    apt-get update
+    # Update package lists and upgrade system
+    apt-get update && apt-get upgrade -y
     
     # Install essential packages
     apt-get install -y \
         python3-dev \
         python3-pip \
-        python3-venv \
         python3-setuptools \
         python3-opencv \
+        python3-numpy \
+        python3-pil \
+        python3-yaml \
+        python3-psutil \
+        cmake \
+        build-essential \
+        libopenblas-dev \
+        liblapack-dev \
+        libjpeg-dev \
+        libatlas-base-dev \
         v4l-utils \
         espeak \
         || true
@@ -61,75 +70,36 @@ install_system_deps() {
     done
 }
 
-# Function to set up Python virtual environment
-setup_virtualenv() {
-    log "Setting up Python virtual environment..."
+# Function to install Python packages
+install_python_packages() {
+    log "Installing Python packages..."
     
-    # Remove existing venv if it exists
-    rm -rf venv
-    
-    # Create fresh virtual environment
-    python3 -m venv venv
-    source venv/bin/activate
-    
-    # Upgrade pip and install build tools
-    pip install --upgrade pip wheel setuptools build
-
-    # Install system-level dependencies first
-    log "Installing system dependencies..."
-    sudo apt-get install -y \
-        cmake \
-        libopenblas-dev \
-        liblapack-dev \
-        libjpeg-dev \
-        || true
-
-    # Install numpy first
-    log "Installing numpy..."
-    pip install numpy==1.24.3
-
     # Install dlib with specific version
     log "Installing dlib..."
-    pip install dlib==19.24.1
+    python3 -m pip install --break-system-packages dlib==19.24.1
 
-    # Install face_recognition dependencies
-    log "Installing face_recognition dependencies..."
-    pip install \
+    # Install face_recognition and its dependencies
+    log "Installing face_recognition and dependencies..."
+    python3 -m pip install --break-system-packages \
+        face_recognition==1.3.0 \
         Click>=6.0 \
-        pillow \
         scipy>=0.17.0
-
-    # Install face_recognition
-    log "Installing face_recognition..."
-    pip install face_recognition==1.3.0
 
     # Install remaining packages
     log "Installing remaining packages..."
-    pip install \
-        opencv-python==4.8.0.74 \
-        psutil==5.9.5 \
+    python3 -m pip install --break-system-packages \
         pyttsx3==2.90 \
         Flask==2.3.3 \
-        PyYAML==6.0.1
+        cryptography==41.0.1
 
-    # Verify face_recognition installation
-    log "Verifying face_recognition installation..."
-    if ! python3 -c "import face_recognition; print(face_recognition.__version__)" 2>/dev/null; then
-        error "face_recognition not installed properly"
-        # Try reinstalling
-        pip uninstall -y face_recognition
-        pip uninstall -y dlib
-        pip install dlib==19.24.1
-        pip install face_recognition==1.3.0
-    fi
-
-    deactivate
+    # Verify installations
+    log "Verifying installations..."
+    verify_python_packages
 }
 
-# Function to verify_python_packages
+# Function to verify Python packages
 verify_python_packages() {
     log "Verifying Python packages..."
-    source venv/bin/activate
     
     # Test face_recognition import
     if python3 -c "import face_recognition; print('face_recognition available')" 2>/dev/null; then
@@ -147,7 +117,6 @@ verify_python_packages() {
         return 1
     fi
     
-    deactivate
     return 0
 }
 
@@ -194,12 +163,29 @@ recognition:
   min_face_size: 20
   blur_threshold: 100
 
+# Camera settings
+camera:
+  type: 'usb'  # 'usb' or 'picamera'
+  device: 0
+  brightness: 50
+  contrast: 55
+  flip_horizontal: false
+  flip_vertical: false
+
 # Storage settings
 storage:
   base_dir: 'data'
   known_faces_dir: 'data/known_faces'
   unknown_faces_dir: 'data/unknown_faces'
   logs_dir: 'data/logs'
+
+# Greeting settings
+greeting:
+  enabled: true
+  volume: 0.8
+  rate: 150
+  cooldown: 30
+  custom_greetings: {}
 EOF
         chown $SUDO_USER:$SUDO_USER config.yml
     fi
@@ -529,12 +515,29 @@ recognition:
   min_face_size: 20
   blur_threshold: 100
 
+# Camera settings
+camera:
+  type: 'usb'  # 'usb' or 'picamera'
+  device: 0
+  brightness: 50
+  contrast: 55
+  flip_horizontal: false
+  flip_vertical: false
+
 # Storage settings
 storage:
   base_dir: 'data'
   known_faces_dir: 'data/known_faces'
   unknown_faces_dir: 'data/unknown_faces'
   logs_dir: 'data/logs'
+
+# Greeting settings
+greeting:
+  enabled: true
+  volume: 0.8
+  rate: 150
+  cooldown: 30
+  custom_greetings: {}
 EOF
 }
 
@@ -544,14 +547,12 @@ verify_installation() {
     local errors=0
     
     # Check Python packages
-    source venv/bin/activate
     for package in numpy opencv-python dlib face_recognition pyttsx3 Flask PyYAML; do
         if ! pip show $package >/dev/null 2>&1; then
             error "Python package $package not installed properly"
             errors=$((errors + 1))
         fi
     done
-    deactivate
     
     # Check directories
     for dir in data/known_faces data/unknown_faces data/logs templates static/faces ssl; do
@@ -698,37 +699,25 @@ verify_camera() {
 main() {
     log "Starting installation..."
     
-    # Install dependencies
+    # Check if running as root
+    check_root
+    
+    # Install system dependencies
     install_system_deps
     
-    # Set up Python environment
-    setup_virtualenv
-    
-    # Verify Python packages
-    if ! verify_python_packages; then
-        error "Python package verification failed"
-        log "Attempting to fix Python packages..."
-        setup_virtualenv
-        if ! verify_python_packages; then
-            error "Failed to fix Python packages"
-            exit 1
-        fi
-    fi
+    # Install Python packages
+    install_python_packages
     
     # Create directory structure
-    mkdir -p data/{known_faces,unknown_faces,logs}
-    chmod -R 755 data
+    create_directories
     
-    # Update face recognition script
-    update_face_recognition
-    
-    # Create autostart entry
-    create_autostart
+    # Set up configuration
+    setup_config
     
     # Verify camera access
     verify_camera
     
-    log "Installation completed!"
+    log "Installation completed successfully!"
     echo ""
     echo -e "${GREEN}=== Next Steps ===${NC}"
     echo "1. Reboot system:    sudo reboot"
