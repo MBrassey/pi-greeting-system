@@ -457,7 +457,7 @@ verify_installation() {
     
     # Check Python packages
     source venv/bin/activate
-    for package in numpy opencv-python dlib face_recognition picamera2 pyttsx3 Flask PyYAML; do
+    for package in numpy opencv-python dlib face_recognition pyttsx3 Flask PyYAML; do
         if ! pip show $package >/dev/null 2>&1; then
             error "Python package $package not installed properly"
             errors=$((errors + 1))
@@ -476,12 +476,6 @@ verify_installation() {
     # Check configuration
     if [ ! -f "config.yml" ]; then
         error "Configuration file not created"
-        errors=$((errors + 1))
-    fi
-    
-    # Check services
-    if [ ! -f "/etc/systemd/system/facial-recognition-web.service" ]; then
-        error "Web interface service not installed properly"
         errors=$((errors + 1))
     fi
     
@@ -589,28 +583,15 @@ configure_camera() {
 main() {
     log "Starting installation..."
     
-    # Check if running as root
-    check_root
-    
-    # Install system dependencies
+    # Install dependencies
     install_system_deps
-    
-    # Verify system libraries
-    verify_system_libs
-    
-    # Set up camera
-    if ! configure_camera; then
-        warning "Camera configuration failed, continuing anyway..."
-    fi
     
     # Set up Python environment
     setup_virtualenv
     
     # Create directory structure
-    create_directories
-    
-    # Set up configuration
-    setup_config
+    mkdir -p data/{known_faces,unknown_faces,logs}
+    chmod -R 755 data
     
     # Update face recognition script
     update_face_recognition
@@ -618,37 +599,19 @@ main() {
     # Create autostart entry
     create_autostart
     
-    # Set up web service
-    setup_service
-    
-    # Update scripts
-    update_scripts
-    
     # Verify installation
     if ! verify_installation; then
         warning "Some components may not have installed correctly"
     fi
     
-    # Final library verification
-    verify_system_libs
-    
     log "Installation completed!"
-    echo ""
-    echo -e "${GREEN}=== System Status ===${NC}"
-    echo "Camera: $(v4l2-ctl --list-devices | grep -q "bcm2835-v4l2" && echo "Connected" || echo "Not Connected")"
-    echo "Python: $(python3 --version)"
-    echo "Web Service: $(systemctl is-active facial-recognition-web.service &>/dev/null && echo "Running" || echo "Failed")"
-    echo "Display: Will start after login"
     echo ""
     echo -e "${GREEN}=== Next Steps ===${NC}"
     echo "1. Reboot system:    sudo reboot"
     echo "2. View logs:        tail -f /var/log/facial-recognition/system.log"
-    echo "3. Web interface:    http://$(hostname -I | cut -d' ' -f1):8080"
     echo ""
     echo -e "${YELLOW}Note: System reboot required to apply all changes${NC}"
     echo -e "${GREEN}Video feed will appear automatically after logging in${NC}"
-    
-    # If you want to start it manually after reboot, run:
     echo -e "${YELLOW}To start manually: /usr/local/bin/start-facial-recognition${NC}"
 }
 

@@ -97,49 +97,28 @@ class FacialRecognitionSystem:
     
     def setup_camera(self):
         """Initialize and configure camera subsystem"""
-        try:
-            camera_config = self.config['camera']
-            
-            if camera_config['type'] == 'picamera':
-                try:
-                    self.camera = picamera2.Picamera2()
-                    config = self.camera.create_video_configuration(
-                        main={"size": tuple(self.config['recognition']['resolution'])}
-                    )
-                    self.camera.configure(config)
-                    self.camera.start()
-                    # Add camera warmup time
-                    time.sleep(2)
-                    self.using_picamera = True
-                    self.logger.info("Pi Camera initialized successfully")
-                except ImportError:
-                    self.logger.error("picamera2 module not found. Please install: pip install picamera2")
-                    sys.exit(1)
-                except Exception as e:
-                    self.logger.error(f"Failed to initialize Pi Camera: {e}")
-                    self.logger.info("Falling back to USB camera...")
-                    self.setup_usb_camera(camera_config)
-            else:
-                self.setup_usb_camera(camera_config)
-            
-            self.logger.info(f"Camera initialized: {camera_config['type']}")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize camera: {e}")
-            sys.exit(1)
-    
-    def setup_usb_camera(self, camera_config):
-        """Initialize USB camera"""
-        self.camera = cv2.VideoCapture(camera_config['device'])
-        if not self.camera.isOpened():
-            self.logger.error("Failed to open USB camera")
-            sys.exit(1)
+        # Try all possible camera indices
+        for i in range(10):  # Try indices 0-9
+            self.logger.info(f"Trying camera index {i}")
+            self.camera = cv2.VideoCapture(i)
+            if self.camera.isOpened():
+                ret, test_frame = self.camera.read()
+                if ret and test_frame is not None:
+                    self.logger.info(f"Successfully opened camera at index {i}")
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    self.camera.set(cv2.CAP_PROP_FPS, 30)
+                    
+                    # Create window
+                    cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
+                    cv2.moveWindow('Facial Recognition System', 0, 0)
+                    return
+                else:
+                    self.camera.release()
         
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 
-                       self.config['recognition']['resolution'][0])
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 
-                       self.config['recognition']['resolution'][1])
-        self.using_picamera = False
-        self.logger.info("USB camera initialized successfully")
+        # If we get here, no camera was found
+        self.logger.error("No working camera found!")
+        sys.exit(1)
     
     def setup_audio(self):
         """Initialize text-to-speech synthesis engine"""
@@ -241,11 +220,18 @@ class FacialRecognitionSystem:
     
     def get_frame(self):
         """Get frame from camera"""
-        if self.using_picamera:
-            frame = self.camera.capture_array()
-            return True, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            return self.camera.read()
+        if not hasattr(self, 'camera') or not self.camera.isOpened():
+            self.logger.error("Camera not initialized or closed")
+            return False, None
+            
+        ret, frame = self.camera.read()
+        if not ret:
+            self.logger.warning("Failed to capture frame, retrying...")
+            # Try to reinitialize camera
+            self.camera.release()
+            self.setup_camera()
+            return False, None
+        return True, frame
     
     def process_frame(self, frame):
         """Process a single frame"""
