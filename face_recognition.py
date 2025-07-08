@@ -23,15 +23,7 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from PIL import Image
 from cryptography.fernet import Fernet
-
-# Face recognition imports
-from face_recognition import (
-    load_image_file,
-    face_locations,
-    face_encodings,
-    compare_faces,
-    face_distance
-)
+import face_recognition  # Import the module directly
 
 class FacialRecognitionSystem:
     def __init__(self):
@@ -251,11 +243,11 @@ class FacialRecognitionSystem:
                     self.logger.debug(f"Loading face for: {name}")
                     
                     # Load and process face
-                    image = load_image_file(str(face_file))
-                    face_encodings = face_encodings(image)
+                    image = face_recognition.load_image_file(str(face_file))
+                    encodings = face_recognition.face_encodings(image)
                     
-                    if face_encodings:
-                        face_encoding = face_encodings[0]
+                    if encodings:
+                        face_encoding = encodings[0]
                         if self.config['security']['encrypt_faces']:
                             face_encoding = self.encrypt_encoding(face_encoding)
                         self.known_face_encodings.append(face_encoding)
@@ -322,25 +314,25 @@ class FacialRecognitionSystem:
         rgb_frame = frame if self.using_picamera else cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Find faces in frame
-        face_locations = face_locations(
+        locations = face_recognition.face_locations(
             rgb_frame,
             model=self.config['recognition']['model']
         )
         
-        if not face_locations:
+        if not locations:
             return frame
         
         # Get face encodings
-        face_encodings = face_encodings(
+        encodings = face_recognition.face_encodings(
             rgb_frame,
-            face_locations,
+            locations,
             num_jitters=1  # Increase for better accuracy, but slower
         )
         
         # Process each face
-        for face_encoding, face_location in zip(face_encodings, face_locations):
-            name = self.identify_face(face_encoding)
-            self.handle_face(name, face_encoding, face_location, frame)
+        for encoding, location in zip(encodings, locations):
+            name = self.identify_face(encoding)
+            self.handle_face(name, encoding, location, frame)
         
         return frame
     
@@ -352,14 +344,14 @@ class FacialRecognitionSystem:
         if self.config['security']['encrypt_faces']:
             face_encoding = self.encrypt_encoding(face_encoding)
         
-        matches = compare_faces(
+        matches = face_recognition.compare_faces(
             self.known_face_encodings,
             face_encoding,
             tolerance=self.config['recognition']['tolerance']
         )
         
         if True in matches:
-            face_distances = face_distance(
+            face_distances = face_recognition.face_distance(
                 self.known_face_encodings,
                 face_encoding
             )

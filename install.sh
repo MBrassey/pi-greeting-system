@@ -103,7 +103,7 @@ install_system_deps() {
         git clone https://github.com/davisking/dlib.git
     fi
     cd dlib
-    python3 setup.py install --user
+    python3 setup.py install --prefix=/usr/local
     cd ..
     rm -rf dlib
 
@@ -113,18 +113,9 @@ install_system_deps() {
         git clone https://github.com/ageitgey/face_recognition.git
     fi
     cd face_recognition
-    python3 setup.py install --user
+    python3 setup.py install --prefix=/usr/local
     cd ..
     rm -rf face_recognition
-
-    # Update PYTHONPATH to include user site-packages
-    SITE_PACKAGES=$(python3 -c "import site; print(site.USER_SITE)")
-    if ! grep -q "PYTHONPATH" /etc/environment; then
-        echo "PYTHONPATH=${SITE_PACKAGES}" >> /etc/environment
-    else
-        sed -i "s|PYTHONPATH=.*|PYTHONPATH=${SITE_PACKAGES}|" /etc/environment
-    fi
-    export PYTHONPATH=${SITE_PACKAGES}
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -142,9 +133,6 @@ install_system_deps() {
 # Function to verify Python packages
 verify_python_packages() {
     log "Verifying Python packages..."
-    
-    # Source environment to get updated PYTHONPATH
-    source /etc/environment
     
     # Test imports
     packages=(
@@ -248,9 +236,6 @@ export XAUTHORITY=/home/$USER/.Xauthority
 
 # Change to installation directory
 cd "$(dirname "$0")"
-
-# Source environment for PYTHONPATH
-source /etc/environment
 
 # Fix video permissions if needed
 for device in /dev/video*; do
