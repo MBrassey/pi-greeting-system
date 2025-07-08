@@ -56,6 +56,17 @@ install_system_deps() {
         libgtk-3-dev \
         || true
 
+    # Install libcamera and related packages
+    apt-get install -y \
+        libcamera0 \
+        libcamera-dev \
+        libcamera-tools \
+        python3-libcamera \
+        python3-picamera2 \
+        libcamera-apps \
+        libcamera-apps-lite \
+        || true
+
     # Install Python dependencies
     apt-get install -y \
         python3-dev \
@@ -66,6 +77,10 @@ install_system_deps() {
         python3-opencv \
         python3-picamera2 \
         python3-numpy \
+        python3-psutil \
+        python3-pil \
+        python3-yaml \
+        python3-libcamera \
         || true
 
     # Install audio dependencies
@@ -79,6 +94,12 @@ install_system_deps() {
 
     # Fix any broken installs
     apt-get --fix-broken install -y
+    
+    # Make sure all dependencies are satisfied
+    apt-get install -f -y
+    
+    # Update the dynamic linker cache
+    ldconfig
 }
 
 # Function to set up Python virtual environment
@@ -96,15 +117,6 @@ setup_virtualenv() {
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
 
-    # Install system-level Python packages
-    sudo apt-get install -y \
-        python3-psutil \
-        python3-opencv \
-        python3-numpy \
-        python3-pil \
-        python3-yaml \
-        || true
-
     # Install base packages first
     log "Installing base Python packages..."
     pip install --no-cache-dir \
@@ -112,6 +124,13 @@ setup_virtualenv() {
         psutil \
         pillow \
         pyyaml \
+        || true
+
+    # Install libcamera and picamera2 first
+    log "Installing camera packages..."
+    pip install --no-cache-dir \
+        picamera2 \
+        libcamera \
         || true
 
     # Install dlib with custom flags
@@ -125,7 +144,6 @@ setup_virtualenv() {
     packages=(
         "opencv-python"
         "face_recognition"
-        "picamera2"
         "pyttsx3"
         "Flask"
     )
@@ -152,6 +170,7 @@ setup_virtualenv() {
         "face_recognition"
         "dlib"
         "picamera2"
+        "libcamera"
         "pyttsx3"
         "Flask"
         "PyYAML"
@@ -502,6 +521,41 @@ EOF
     chmod +x backup.sh
 }
 
+# Function to verify system libraries
+verify_system_libs() {
+    log "Verifying system libraries..."
+    
+    # Check for critical libraries
+    local missing_libs=()
+    
+    libs_to_check=(
+        "libcamera.so"
+        "libcamera-base.so"
+        "libboost_python"
+        "libv4l2.so"
+        "libopencv_core.so"
+    )
+    
+    for lib in "${libs_to_check[@]}"; do
+        if ! ldconfig -p | grep -q "$lib"; then
+            missing_libs+=($lib)
+        fi
+    done
+    
+    if [ ${#missing_libs[@]} -ne 0 ]; then
+        warning "Missing system libraries: ${missing_libs[*]}"
+        log "Attempting to install missing libraries..."
+        apt-get install -y \
+            libcamera0 \
+            libcamera-dev \
+            libboost-python-dev \
+            libv4l-dev \
+            python3-opencv \
+            || true
+        ldconfig
+    fi
+}
+
 # Main installation function
 main() {
     log "Starting installation..."
@@ -511,6 +565,9 @@ main() {
     
     # Install system dependencies
     install_system_deps
+    
+    # Verify system libraries
+    verify_system_libs
     
     # Set up camera
     if ! detect_camera_type; then
@@ -548,6 +605,9 @@ main() {
     if ! verify_installation; then
         warning "Some components may not have installed correctly"
     fi
+    
+    # Final library verification
+    verify_system_libs
     
     log "Installation completed!"
     echo ""
