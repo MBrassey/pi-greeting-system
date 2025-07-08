@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Raspberry Pi Facial Recognition System Installation Script
-# Bulletproof installation for Raspberry Pi OS - No manual steps required
+# Optimized for Raspberry Pi 5 OS
 
 # Colors for output
 RED='\033[0;31m'
@@ -24,131 +24,63 @@ check_root() {
     fi
 }
 
-# Emergency cleanup function
-emergency_cleanup() {
-    log "Performing emergency cleanup..."
+# Function to fix dpkg
+fix_dpkg() {
+    log "Fixing dpkg state..."
     
-    # Kill all package management processes
-    for pid in $(ps aux | grep -E 'apt|dpkg' | grep -v grep | awk '{print $2}'); do
-        kill -9 $pid 2>/dev/null || true
-    done
+    # Stop services that might interfere
+    systemctl stop apt-daily.service apt-daily-upgrade.service || true
+    systemctl kill --kill-who=all apt-daily.service apt-daily-upgrade.service || true
     
-    # Remove all lock files
-    rm -f /var/lib/dpkg/lock* || true
-    rm -f /var/lib/apt/lists/lock || true
-    rm -f /var/cache/apt/archives/lock || true
-    rm -f /var/lib/dpkg/updates/* || true
-    rm -f /var/cache/apt/archives/partial/* || true
+    # Kill any existing package processes
+    killall -9 apt apt-get dpkg 2>/dev/null || true
     
-    # Clean package manager state
-    rm -rf /var/lib/apt/lists/* || true
+    # Remove problematic files
+    rm -rf /var/lib/dpkg/updates/*
+    rm -rf /var/lib/apt/lists/partial/*
+    rm -f /var/lib/dpkg/lock*
+    rm -f /var/lib/apt/lists/lock
+    rm -f /var/cache/apt/archives/lock
+    
+    # Recreate dpkg state directory
+    mkdir -p /var/lib/dpkg/updates
     mkdir -p /var/lib/apt/lists/partial
     
-    # Fix SSH list file
+    # Fix ssh.list issue
     mkdir -p /var/lib/dpkg/info
-    touch /var/lib/dpkg/info/ssh.list || true
-    touch /var/lib/dpkg/status || true
+    echo "" > /var/lib/dpkg/info/ssh.list
     
-    # Reset dpkg state
+    # Reconfigure dpkg
     dpkg --configure -a || true
     
-    # Force clean and update
-    apt-get clean || true
-    apt-get update --fix-missing || true
-    
-    log "Emergency cleanup completed"
-}
-
-# Super robust package manager fix
-fix_package_manager() {
-    log "Performing thorough package manager fix..."
-    
-    # First run emergency cleanup
-    emergency_cleanup
-    
-    # Try to fix any broken packages
-    DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
-    
-    # Update package lists with multiple retries
-    max_attempts=3
-    attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if apt-get update --fix-missing; then
-            break
-        fi
-        log "Retrying package list update (attempt $attempt of $max_attempts)..."
-        emergency_cleanup
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-    
-    # Final verification
-    if ! apt-get update --fix-missing; then
-        warning "Package manager may still have issues, but continuing anyway..."
-    else
-        log "Package manager fixed successfully"
-    fi
-}
-
-# Function to install a single package with retry
-install_package() {
-    local package=$1
-    local max_attempts=3
-    local attempt=1
-    
-    while [ $attempt -le $max_attempts ]; do
-        log "Installing $package (attempt $attempt of $max_attempts)..."
-        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"; then
-            return 0
-        fi
-        warning "Failed to install $package, retrying..."
-        fix_package_manager
-        attempt=$((attempt + 1))
-        sleep 2
-    done
-    
-    return 1
+    # Clean and update
+    apt-get clean
+    apt-get update --fix-missing
 }
 
 # Function to install system dependencies
 install_system_deps() {
     log "Installing system dependencies..."
     
-    # Fix package manager first
-    fix_package_manager
+    # Fix dpkg first
+    fix_dpkg
     
-    # Remove potentially conflicting packages
-    apt-get remove -y python3-picamera2 python3-libcamera || true
+    # Update system first
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     
-    # Core build dependencies first
-    core_packages=(
-        "build-essential"
-        "cmake"
-        "pkg-config"
-    )
-    
-    # Install core packages first
-    for package in "${core_packages[@]}"; do
-        if ! install_package "$package"; then
-            error "Failed to install core package $package"
-            emergency_cleanup
-            if ! install_package "$package"; then
-                return 1
-            fi
-        fi
-    done
-    
-    # Main packages
+    # Install dependencies one at a time
     packages=(
         "python3-dev"
         "python3-pip"
         "python3-setuptools"
-        "python3-wheel"
         "python3-opencv"
         "python3-numpy"
         "python3-pil"
         "python3-yaml"
         "python3-psutil"
+        "cmake"
+        "build-essential"
         "libopenblas-dev"
         "liblapack-dev"
         "libjpeg-dev"
@@ -158,10 +90,12 @@ install_system_deps() {
         "git"
     )
     
-    # Install main packages
     for package in "${packages[@]}"; do
-        if ! install_package "$package"; then
-            warning "Failed to install $package, continuing anyway..."
+        log "Installing $package..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"
+        if [ $? -ne 0 ]; then
+            fix_dpkg
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"
         fi
     done
 
@@ -182,39 +116,14 @@ install_system_deps() {
 install_python_packages() {
     log "Installing Python packages..."
     
-    # Ensure pip is up to date
-    python3 -m pip install --upgrade pip || true
+    # Update pip
+    python3 -m pip install --upgrade pip
     
-    # Install packages one by one with retry mechanism
-    packages=(
-        "numpy"
-        "dlib"
-        "face_recognition"
-        "pyttsx3"
-        "Flask"
-        "cryptography"
-    )
-    
-    for package in "${packages[@]}"; do
-        log "Installing $package..."
-        max_attempts=3
-        attempt=1
-        
-        while [ $attempt -le $max_attempts ]; do
-            if python3 -m pip install --no-cache-dir "$package"; then
-                break
-            fi
-            attempt=$((attempt + 1))
-            log "Retrying $package installation (attempt $attempt of $max_attempts)..."
-            # Clear pip cache and retry
-            rm -rf ~/.cache/pip
-            sleep 2
-        done
-        
-        if [ $attempt -gt $max_attempts ]; then
-            warning "Failed to install $package after $max_attempts attempts, continuing..."
-        fi
-    done
+    # Install packages
+    python3 -m pip install --no-cache-dir numpy
+    python3 -m pip install --no-cache-dir dlib
+    python3 -m pip install --no-cache-dir face_recognition
+    python3 -m pip install --no-cache-dir pyttsx3 Flask cryptography
 }
 
 # Function to verify Python packages
@@ -321,45 +230,27 @@ verify_camera() {
 
 # Main installation function
 main() {
-    log "Starting bulletproof installation for Raspberry Pi..."
+    log "Starting installation for Raspberry Pi 5..."
     
     # Check if running as root
     check_root
     
-    # Initial emergency cleanup
-    emergency_cleanup
+    # Fix dpkg state first
+    fix_dpkg
     
-    # Install system dependencies with retry mechanism
-    max_attempts=3
-    attempt=1
-    
-    while [ $attempt -le $max_attempts ]; do
-        log "Installing system dependencies (attempt $attempt of $max_attempts)..."
-        if install_system_deps; then
-            break
-        fi
-        error "System dependencies installation failed, trying emergency cleanup..."
-        emergency_cleanup
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-    
-    if [ $attempt -gt $max_attempts ]; then
-        warning "Some system dependencies failed to install, continuing anyway..."
-    fi
+    # Install system dependencies
+    install_system_deps
     
     # Install Python packages
-    if ! install_python_packages; then
-        warning "Some Python packages may have failed to install, continuing anyway..."
-    fi
+    install_python_packages
     
-    # Create directory structure (always try)
+    # Create directory structure
     create_directories
     
-    # Set up configuration (always try)
+    # Set up configuration
     setup_config
     
-    # Verify camera (don't fail on error)
+    # Verify camera
     verify_camera || true
     
     # Final verification
@@ -369,12 +260,8 @@ main() {
     else
         warning "Installation completed with some package verification failures"
         log "The system may still work, but some features might be limited"
-        log "You can try running the script again if you want to retry failed installations"
     fi
 }
-
-# Trap interrupts and cleanup
-trap emergency_cleanup INT TERM
 
 # Run main installation
 main 
