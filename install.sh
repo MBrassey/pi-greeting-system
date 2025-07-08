@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Raspberry Pi Facial Recognition System Installation Script
-# Optimized for Raspberry Pi 5 OS - APT only version
+# Optimized for Raspberry Pi 5 OS
 
 # Colors for output
 RED='\033[0;31m'
@@ -22,6 +22,23 @@ check_root() {
         error "Please run as root (use sudo)"
         exit 1
     fi
+}
+
+# Function to setup repositories
+setup_repositories() {
+    log "Setting up package repositories..."
+    
+    # Add Pi repository key
+    curl -fsSL https://archive.raspberrypi.org/debian/raspberrypi.gpg.key | gpg --dearmor -o /usr/share/keyrings/raspberrypi-archive-keyring.gpg
+    
+    # Add Pi repository
+    echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list
+    
+    # Add pip repository for face_recognition
+    echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list.d/debian.list
+    
+    # Update package lists
+    apt-get update
 }
 
 # Function to fix dpkg
@@ -51,7 +68,7 @@ fix_dpkg() {
     fi
     
     # Fix package system
-    dpkg --configure -a
+    dpkg --configure -a || true
     apt-get clean
     apt-get update --fix-missing
 }
@@ -67,39 +84,41 @@ install_system_deps() {
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     
-    # Install dependencies
+    # Install build dependencies first
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        python3 \
+        build-essential \
+        cmake \
+        pkg-config \
         python3-dev \
-        python3-opencv \
+        python3-pip \
+        python3-setuptools \
+        || true
+    
+    # Install face recognition dependencies
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libopenblas-dev \
+        liblapack-dev \
+        libatlas-base-dev \
+        libjpeg-dev \
+        || true
+    
+    # Install Python packages via apt
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         python3-numpy \
+        python3-opencv \
         python3-pil \
         python3-yaml \
         python3-psutil \
-        python3-dlib \
-        python3-face-recognition \
         python3-flask \
         python3-pyttsx3 \
         v4l-utils \
         espeak \
-        || {
-            error "Failed to install packages, retrying with fix..."
-            fix_dpkg
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                python3 \
-                python3-dev \
-                python3-opencv \
-                python3-numpy \
-                python3-pil \
-                python3-yaml \
-                python3-psutil \
-                python3-dlib \
-                python3-face-recognition \
-                python3-flask \
-                python3-pyttsx3 \
-                v4l-utils \
-                espeak
-        }
+        || true
+
+    # Install dlib and face_recognition via pip (more reliable than apt versions)
+    python3 -m pip install --break-system-packages \
+        dlib \
+        face_recognition
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -256,7 +275,10 @@ main() {
     # Check if running as root
     check_root
     
-    # Fix dpkg state first
+    # Setup repositories first
+    setup_repositories
+    
+    # Fix dpkg state
     fix_dpkg
     
     # Install system dependencies
