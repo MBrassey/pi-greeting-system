@@ -79,6 +79,7 @@ install_system_deps() {
         "python3-pil"
         "python3-yaml"
         "python3-psutil"
+        "python3-dlib"
         "cmake"
         "build-essential"
         "libopenblas-dev"
@@ -116,14 +117,29 @@ install_system_deps() {
 install_python_packages() {
     log "Installing Python packages..."
     
-    # Update pip
-    python3 -m pip install --upgrade pip
+    # Update pip with break-system-packages flag
+    python3 -m pip install --upgrade pip --break-system-packages
     
-    # Install packages
-    python3 -m pip install --no-cache-dir numpy
-    python3 -m pip install --no-cache-dir dlib
-    python3 -m pip install --no-cache-dir face_recognition
-    python3 -m pip install --no-cache-dir pyttsx3 Flask cryptography
+    # Install packages with break-system-packages flag
+    packages=(
+        "numpy"
+        "dlib"
+        "face_recognition"
+        "pyttsx3"
+        "Flask"
+        "cryptography"
+    )
+    
+    for package in "${packages[@]}"; do
+        log "Installing $package..."
+        python3 -m pip install --no-cache-dir "$package" --break-system-packages
+        
+        # Verify installation
+        if ! python3 -c "import ${package//-/_}" 2>/dev/null; then
+            warning "Failed to verify $package, attempting reinstall..."
+            python3 -m pip install --no-cache-dir --force-reinstall "$package" --break-system-packages
+        fi
+    done
 }
 
 # Function to verify Python packages
