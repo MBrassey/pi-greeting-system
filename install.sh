@@ -31,32 +31,22 @@ install_system_deps() {
     # Update package lists
     apt-get update
     
-    # Install essential packages
+    # Install essential build dependencies first
     apt-get install -y \
-        python3-dev \
-        python3-pip \
-        python3-venv \
-        python3-wheel \
-        python3-setuptools \
         build-essential \
         cmake \
         pkg-config \
-        git \
-        wget \
-        curl \
+        libcap-dev \
+        libx11-dev \
+        libatlas-base-dev \
+        libgtk-3-dev \
+        libboost-python-dev \
+        || true
+
+    # Install camera and video dependencies
+    apt-get install -y \
         v4l-utils \
         i2c-tools \
-        libatlas-base-dev \
-        libjasper-dev \
-        libqtgui4 \
-        libqt4-test \
-        libhdf5-dev \
-        libhdf5-serial-dev \
-        libharfbuzz-dev \
-        libwebp-dev \
-        libjpeg-dev \
-        libpng-dev \
-        libtiff-dev \
         libavcodec-dev \
         libavformat-dev \
         libswscale-dev \
@@ -64,10 +54,22 @@ install_system_deps() {
         libxvidcore-dev \
         libx264-dev \
         libgtk-3-dev \
-        libcanberra-gtk* \
-        libatlas-base-dev \
-        gfortran \
-        guvcview \
+        || true
+
+    # Install Python dependencies
+    apt-get install -y \
+        python3-dev \
+        python3-pip \
+        python3-venv \
+        python3-wheel \
+        python3-setuptools \
+        python3-opencv \
+        python3-picamera2 \
+        python3-numpy \
+        || true
+
+    # Install audio dependencies
+    apt-get install -y \
         espeak \
         alsa-utils \
         pulseaudio \
@@ -93,21 +95,30 @@ setup_virtualenv() {
     
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
-    
-    # Install Python packages
-    pip install \
-        numpy \
-        opencv-python \
-        dlib \
-        face_recognition \
-        picamera2 \
-        pyttsx3 \
-        Flask \
-        PyYAML \
-        psutil \
-        cryptography \
-        pillow \
-        || error "Failed to install some Python packages, but continuing..."
+
+    # Install numpy first (required for other packages)
+    pip install numpy
+
+    # Install dlib with custom flags
+    pip install dlib --no-cache-dir --install-option="--no" --install-option="--dlib" --install-option="USE_AVX_INSTRUCTIONS"
+
+    # Install other packages one by one with retries
+    packages=(
+        "opencv-python"
+        "face_recognition"
+        "picamera2"
+        "pyttsx3"
+        "Flask"
+        "PyYAML"
+    )
+
+    for package in "${packages[@]}"; do
+        log "Installing $package..."
+        pip install --no-cache-dir $package || {
+            warning "First attempt to install $package failed, retrying..."
+            pip install --no-cache-dir --ignore-installed $package
+        }
+    done
     
     deactivate
 }
@@ -216,81 +227,65 @@ EOF
     fi
 }
 
-# Function to set up system service
-setup_service() {
-    log "Setting up system service..."
+# Function to create the desktop autostart entry
+create_autostart() {
+    log "Creating desktop autostart entry..."
     
-    # Create X11 autostart directory if it doesn't exist
+    # Create autostart directory
     local autostart_dir="/home/$SUDO_USER/.config/autostart"
     mkdir -p "$autostart_dir"
-    chown $SUDO_USER:$SUDO_USER "$autostart_dir"
-
-    # Create desktop entry for autostart
+    
+    # Create desktop entry
     cat > "$autostart_dir/facial-recognition.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=Facial Recognition System
 Comment=Facial Recognition System with Camera Feed
-Exec=$(pwd)/start_display.sh
+Exec=/usr/local/bin/start-facial-recognition
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
-    chown $SUDO_USER:$SUDO_USER "$autostart_dir/facial-recognition.desktop"
     
-    # Create display startup script
-    cat > start_display.sh << 'EOF'
+    # Create startup script in /usr/local/bin
+    cat > /usr/local/bin/start-facial-recognition << 'EOF'
 #!/bin/bash
 
-# Wait for X server to be ready
-sleep 5
+# Wait for desktop environment to be fully loaded
+sleep 10
 
-# Set display position (adjust these values as needed)
+# Set display
 export DISPLAY=:0
 export XAUTHORITY=/home/$USER/.Xauthority
 
-# Activate virtual environment
-source venv/bin/activate
+# Change to installation directory
+cd /home/$USER/code/pi-greeting-system
 
-# Run the facial recognition system with display
+# Activate virtual environment and run
+source venv/bin/activate
 python3 face_recognition.py --display
 
 # Deactivate virtual environment
 deactivate
 EOF
-    chmod +x start_display.sh
-    chown $SUDO_USER:$SUDO_USER start_display.sh
+    
+    # Make startup script executable
+    chmod +x /usr/local/bin/start-facial-recognition
+    
+    # Set proper ownership
+    chown $SUDO_USER:$SUDO_USER "$autostart_dir/facial-recognition.desktop"
+    chown $SUDO_USER:$SUDO_USER /usr/local/bin/start-facial-recognition
+}
 
-    # Create service file
-    cat > /etc/systemd/system/facial-recognition.service << EOF
-[Unit]
-Description=Facial Recognition System
-After=network.target graphical.target
-Wants=network-online.target graphical.target
-
-[Service]
-Type=simple
-User=$SUDO_USER
-Group=$SUDO_USER
-WorkingDirectory=$(pwd)
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/$SUDO_USER/.Xauthority
-# Ensure the display is available
-ExecStartPre=/bin/sleep 5
-ExecStart=$(pwd)/venv/bin/python face_recognition.py --display
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=graphical.target
-EOF
-
-    # Create web interface service
+# Function to set up system service (only for background tasks)
+setup_service() {
+    log "Setting up system service..."
+    
+    # Create service file for web interface only
     cat > /etc/systemd/system/facial-recognition-web.service << EOF
 [Unit]
 Description=Facial Recognition Web Interface
-After=network.target facial-recognition.service
+After=network.target
 Wants=network-online.target
-Requires=facial-recognition.service
 
 [Service]
 Type=simple
@@ -302,7 +297,7 @@ Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
 EOF
 
     # Set up log rotation
@@ -322,29 +317,10 @@ EOF
     mkdir -p /var/log/facial-recognition
     chown -R $SUDO_USER:$SUDO_USER /var/log/facial-recognition
 
-    # Ensure X11 permissions
-    xhost +local:$SUDO_USER || true
-
-    # Add X11 permissions to user's bashrc if not already present
-    if ! grep -q "xhost +local:\$USER" "/home/$SUDO_USER/.bashrc"; then
-        echo "xhost +local:\$USER" >> "/home/$SUDO_USER/.bashrc"
-    fi
-
-    # Reload systemd and enable/start services
-    log "Enabling and starting services..."
+    # Reload systemd and enable web service
     systemctl daemon-reload
-    systemctl enable facial-recognition.service
     systemctl enable facial-recognition-web.service
-    systemctl start facial-recognition.service
     systemctl start facial-recognition-web.service
-    
-    # Verify services are running
-    if ! systemctl is-active --quiet facial-recognition.service; then
-        error "Main service failed to start. Check logs with: journalctl -u facial-recognition.service"
-    fi
-    if ! systemctl is-active --quiet facial-recognition-web.service; then
-        error "Web interface service failed to start. Check logs with: journalctl -u facial-recognition-web.service"
-    fi
 }
 
 # Function to update face_recognition.py
@@ -403,8 +379,8 @@ verify_installation() {
     fi
     
     # Check services
-    if [ ! -f "/etc/systemd/system/facial-recognition.service" ]; then
-        error "System service not installed properly"
+    if [ ! -f "/etc/systemd/system/facial-recognition-web.service" ]; then
+        error "Web interface service not installed properly"
         errors=$((errors + 1))
     fi
     
@@ -483,7 +459,10 @@ main() {
     # Update face recognition script
     update_face_recognition
     
-    # Set up system service
+    # Create autostart entry
+    create_autostart
+    
+    # Set up web service
     setup_service
     
     # Update scripts
@@ -499,8 +478,8 @@ main() {
     echo -e "${GREEN}=== System Status ===${NC}"
     echo "Camera: ${CAMERA_TYPE:-Unknown} (${CAMERA_DEV:-None})"
     echo "Python: $(python3 --version)"
-    echo "Services: $(systemctl is-active facial-recognition.service &>/dev/null && echo "Running" || echo "Failed")"
-    echo "Display: Enabled"
+    echo "Web Service: $(systemctl is-active facial-recognition-web.service &>/dev/null && echo "Running" || echo "Failed")"
+    echo "Display: Will start after login"
     echo ""
     echo -e "${GREEN}=== Next Steps ===${NC}"
     echo "1. Reboot system:    sudo reboot"
@@ -508,7 +487,10 @@ main() {
     echo "3. Web interface:    http://$(hostname -I | cut -d' ' -f1):8080"
     echo ""
     echo -e "${YELLOW}Note: System reboot required to apply all changes${NC}"
-    echo -e "${GREEN}Video feed will appear automatically after reboot${NC}"
+    echo -e "${GREEN}Video feed will appear automatically after logging in${NC}"
+    
+    # If you want to start it manually after reboot, run:
+    echo -e "${YELLOW}To start manually: /usr/local/bin/start-facial-recognition${NC}"
 }
 
 # Run main installation
