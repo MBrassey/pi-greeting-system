@@ -96,11 +96,30 @@ setup_virtualenv() {
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
 
-    # Install numpy first (required for other packages)
-    pip install numpy
+    # Install system-level Python packages
+    sudo apt-get install -y \
+        python3-psutil \
+        python3-opencv \
+        python3-numpy \
+        python3-pil \
+        python3-yaml \
+        || true
+
+    # Install base packages first
+    log "Installing base Python packages..."
+    pip install --no-cache-dir \
+        numpy \
+        psutil \
+        pillow \
+        pyyaml \
+        || true
 
     # Install dlib with custom flags
-    pip install dlib --no-cache-dir --install-option="--no" --install-option="--dlib" --install-option="USE_AVX_INSTRUCTIONS"
+    log "Installing dlib..."
+    pip install --no-cache-dir dlib --no-deps || {
+        warning "First dlib install attempt failed, trying with different options..."
+        pip install --no-cache-dir dlib
+    }
 
     # Install other packages one by one with retries
     packages=(
@@ -109,16 +128,47 @@ setup_virtualenv() {
         "picamera2"
         "pyttsx3"
         "Flask"
-        "PyYAML"
     )
 
     for package in "${packages[@]}"; do
         log "Installing $package..."
-        pip install --no-cache-dir $package || {
-            warning "First attempt to install $package failed, retrying..."
-            pip install --no-cache-dir --ignore-installed $package
-        }
+        for i in {1..3}; do
+            if pip install --no-cache-dir $package; then
+                break
+            else
+                warning "Attempt $i to install $package failed, retrying..."
+                pip install --no-cache-dir --ignore-installed $package || true
+                sleep 1
+            fi
+        done
     done
+    
+    # Verify critical packages
+    log "Verifying Python packages..."
+    required_packages=(
+        "numpy"
+        "psutil"
+        "opencv-python"
+        "face_recognition"
+        "dlib"
+        "picamera2"
+        "pyttsx3"
+        "Flask"
+        "PyYAML"
+    )
+
+    missing_packages=()
+    for package in "${required_packages[@]}"; do
+        if ! pip show $package >/dev/null 2>&1; then
+            missing_packages+=($package)
+        fi
+    done
+
+    if [ ${#missing_packages[@]} -ne 0 ]; then
+        warning "Some packages were not installed properly: ${missing_packages[*]}"
+        log "Attempting one final install of missing packages..."
+        pip install --no-cache-dir ${missing_packages[@]} || true
+    fi
     
     deactivate
 }
@@ -244,6 +294,7 @@ Comment=Facial Recognition System with Camera Feed
 Exec=/usr/local/bin/start-facial-recognition
 Terminal=false
 X-GNOME-Autostart-enabled=true
+StartupNotify=true
 EOF
     
     # Create startup script in /usr/local/bin
@@ -251,7 +302,7 @@ EOF
 #!/bin/bash
 
 # Wait for desktop environment to be fully loaded
-sleep 10
+sleep 15
 
 # Set display
 export DISPLAY=:0
@@ -260,8 +311,25 @@ export XAUTHORITY=/home/$USER/.Xauthority
 # Change to installation directory
 cd /home/$USER/code/pi-greeting-system
 
+# Ensure virtual environment exists
+if [ ! -d "venv" ]; then
+    echo "Error: Virtual environment not found!"
+    exit 1
+fi
+
 # Activate virtual environment and run
 source venv/bin/activate
+
+# Verify required packages
+for package in face_recognition psutil opencv-python; do
+    if ! pip show $package >/dev/null 2>&1; then
+        echo "Error: Required package $package not found!"
+        deactivate
+        exit 1
+    fi
+done
+
+# Run the facial recognition system
 python3 face_recognition.py --display
 
 # Deactivate virtual environment
@@ -274,6 +342,14 @@ EOF
     # Set proper ownership
     chown $SUDO_USER:$SUDO_USER "$autostart_dir/facial-recognition.desktop"
     chown $SUDO_USER:$SUDO_USER /usr/local/bin/start-facial-recognition
+
+    # Also create a desktop shortcut
+    local desktop_dir="/home/$SUDO_USER/Desktop"
+    if [ -d "$desktop_dir" ]; then
+        cp "$autostart_dir/facial-recognition.desktop" "$desktop_dir/"
+        chown $SUDO_USER:$SUDO_USER "$desktop_dir/facial-recognition.desktop"
+        chmod +x "$desktop_dir/facial-recognition.desktop"
+    fi
 }
 
 # Function to set up system service (only for background tasks)
