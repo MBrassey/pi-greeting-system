@@ -227,6 +227,11 @@ EOF
 create_start_script() {
     log "Creating start script..."
     
+    # First rename the face recognition script if it exists
+    if [ -f "face_recognition.py" ]; then
+        mv face_recognition.py facial_recognition_system.py
+    fi
+    
     cat > start-facial-recognition << 'EOF'
 #!/bin/bash
 
@@ -245,7 +250,7 @@ for device in /dev/video*; do
 done
 
 # Run the facial recognition system
-python3 face_recognition.py
+python3 facial_recognition_system.py
 EOF
     
     chmod +x start-facial-recognition
