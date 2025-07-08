@@ -28,18 +28,21 @@ check_root() {
 fix_package_manager() {
     log "Fixing package manager state..."
     
-    # Fix any broken dependencies
-    apt-get -f install -y
+    # Remove potentially broken packages
+    apt-get remove -y python3-picamera2 python3-libcamera || true
     
-    # Clean package cache
+    # Clean up package manager state
     apt-get clean
     apt-get autoclean
-    
-    # Update package lists
     rm -f /var/lib/apt/lists/lock
     rm -f /var/cache/apt/archives/lock
     rm -f /var/lib/dpkg/lock*
     dpkg --configure -a
+    
+    # Fix any broken installs
+    apt-get -f install -y
+    
+    # Update package lists
     apt-get update
 }
 
@@ -50,30 +53,34 @@ install_system_deps() {
     # Fix package manager first
     fix_package_manager
     
-    # Install essential packages
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3-dev \
-        python3-pip \
-        python3-setuptools \
-        python3-opencv \
-        python3-numpy \
-        python3-pil \
-        python3-yaml \
-        python3-psutil \
-        python3-picamera2 \
-        cmake \
-        build-essential \
-        libopenblas-dev \
-        liblapack-dev \
-        libjpeg-dev \
-        libatlas-base-dev \
-        v4l-utils \
-        espeak \
-        git \
-        || {
-            error "Failed to install system packages"
-            exit 1
+    # Install essential packages one by one to better handle errors
+    packages=(
+        "python3-dev"
+        "python3-pip"
+        "python3-setuptools"
+        "python3-opencv"
+        "python3-numpy"
+        "python3-pil"
+        "python3-yaml"
+        "python3-psutil"
+        "cmake"
+        "build-essential"
+        "libopenblas-dev"
+        "liblapack-dev"
+        "libjpeg-dev"
+        "libatlas-base-dev"
+        "v4l-utils"
+        "espeak"
+        "git"
+    )
+    
+    for package in "${packages[@]}"; do
+        log "Installing $package..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$package" || {
+            error "Failed to install $package"
+            return 1
         }
+    done
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -98,29 +105,21 @@ install_system_deps() {
 install_python_packages() {
     log "Installing Python packages..."
     
-    # Install dlib using apt instead of building from source
-    log "Installing dlib using apt..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y python3-dlib || {
-        error "Failed to install python3-dlib"
-        exit 1
-    }
+    # Upgrade pip
+    python3 -m pip install --upgrade pip
     
-    # Install face_recognition using pip
-    log "Installing face_recognition..."
-    python3 -m pip install --no-cache-dir face_recognition || {
-        error "Failed to install face_recognition"
-        exit 1
-    }
-    
-    # Install other required packages
-    log "Installing additional Python packages..."
+    # Install face_recognition and its dependencies
+    log "Installing face_recognition and dependencies..."
     python3 -m pip install --no-cache-dir \
+        numpy \
+        dlib \
+        face_recognition \
         pyttsx3 \
         Flask \
         cryptography \
         || {
             error "Failed to install Python packages"
-            exit 1
+            return 1
         }
 }
 
