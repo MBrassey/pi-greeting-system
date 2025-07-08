@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Raspberry Pi Facial Recognition System Installation Script
-# Optimized for Raspberry Pi 5 OS
+# Optimized for Raspberry Pi 5 OS - APT only version
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,32 +28,30 @@ check_root() {
 fix_dpkg() {
     log "Fixing dpkg state..."
     
-    # Stop services that might interfere
-    systemctl stop apt-daily.service apt-daily-upgrade.service || true
-    systemctl kill --kill-who=all apt-daily.service apt-daily-upgrade.service || true
+    # Kill any package processes
+    pkill -9 dpkg apt apt-get 2>/dev/null || true
     
-    # Kill any existing package processes
-    killall -9 apt apt-get dpkg 2>/dev/null || true
+    # Remove all locks and temporary files
+    rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+    rm -rf /var/lib/dpkg/updates/* /var/lib/apt/lists/* /var/cache/apt/archives/partial/*
     
-    # Remove problematic files
-    rm -rf /var/lib/dpkg/updates/*
-    rm -rf /var/lib/apt/lists/partial/*
-    rm -f /var/lib/dpkg/lock*
-    rm -f /var/lib/apt/lists/lock
-    rm -f /var/cache/apt/archives/lock
-    
-    # Recreate dpkg state directory
+    # Create required directories
     mkdir -p /var/lib/dpkg/updates
     mkdir -p /var/lib/apt/lists/partial
+    mkdir -p /var/cache/apt/archives/partial
     
-    # Fix ssh.list issue
+    # Fix ssh.list
     mkdir -p /var/lib/dpkg/info
-    echo "" > /var/lib/dpkg/info/ssh.list
+    touch /var/lib/dpkg/status
+    touch /var/lib/dpkg/available
     
-    # Reconfigure dpkg
-    dpkg --configure -a || true
+    # Create empty ssh.list if it doesn't exist
+    if [ ! -f "/var/lib/dpkg/info/ssh.list" ]; then
+        echo "" > /var/lib/dpkg/info/ssh.list
+    fi
     
-    # Clean and update
+    # Fix package system
+    dpkg --configure -a
     apt-get clean
     apt-get update --fix-missing
 }
@@ -65,45 +63,43 @@ install_system_deps() {
     # Fix dpkg first
     fix_dpkg
     
-    # Update system first
+    # Update system
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
     
-    # Remove potentially conflicting packages
-    DEBIAN_FRONTEND=noninteractive apt-get remove -y \
-        python3-numpy \
+    # Install dependencies
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        python3 \
+        python3-dev \
         python3-opencv \
+        python3-numpy \
+        python3-pil \
+        python3-yaml \
+        python3-psutil \
         python3-dlib \
-        || true
-    
-    # Install dependencies one at a time
-    packages=(
-        "python3-dev"
-        "python3-pip"
-        "python3-setuptools"
-        "python3-pil"
-        "python3-yaml"
-        "python3-psutil"
-        "cmake"
-        "build-essential"
-        "libopenblas-dev"
-        "liblapack-dev"
-        "libjpeg-dev"
-        "libatlas-base-dev"
-        "v4l-utils"
-        "espeak"
-        "git"
-        "python3-opencv"
-    )
-    
-    for package in "${packages[@]}"; do
-        log "Installing $package..."
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"
-        if [ $? -ne 0 ]; then
+        python3-face-recognition \
+        python3-flask \
+        python3-pyttsx3 \
+        v4l-utils \
+        espeak \
+        || {
+            error "Failed to install packages, retrying with fix..."
             fix_dpkg
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"
-        fi
-    done
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                python3 \
+                python3-dev \
+                python3-opencv \
+                python3-numpy \
+                python3-pil \
+                python3-yaml \
+                python3-psutil \
+                python3-dlib \
+                python3-face-recognition \
+                python3-flask \
+                python3-pyttsx3 \
+                v4l-utils \
+                espeak
+        }
 
     # Fix video device permissions
     log "Setting up video device permissions..."
@@ -118,71 +114,32 @@ install_system_deps() {
     done
 }
 
-# Function to install Python packages
-install_python_packages() {
-    log "Installing Python packages..."
-    
-    # Update pip with break-system-packages flag
-    python3 -m pip install --upgrade pip --break-system-packages
-    
-    # Install numpy first with specific version
-    log "Installing numpy..."
-    python3 -m pip install --no-cache-dir 'numpy>=1.24.0,<2.0.0' --break-system-packages
-    
-    # Install dlib
-    log "Installing dlib..."
-    python3 -m pip install --no-cache-dir dlib --break-system-packages
-    
-    # Install face_recognition
-    log "Installing face_recognition..."
-    python3 -m pip install --no-cache-dir face_recognition --break-system-packages
-    
-    # Install other packages
-    log "Installing additional packages..."
-    python3 -m pip install --no-cache-dir \
-        pyttsx3 \
-        Flask \
-        cryptography \
-        --break-system-packages
-}
-
 # Function to verify Python packages
 verify_python_packages() {
     log "Verifying Python packages..."
     
-    # Test numpy version first
-    if python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null; then
-        info "NumPy version: $(python3 -c 'import numpy; print(numpy.__version__)')"
-    else
-        error "NumPy not properly installed"
-    fi
+    # Test imports
+    packages=(
+        "cv2"
+        "numpy"
+        "PIL"
+        "yaml"
+        "face_recognition"
+        "flask"
+        "pyttsx3"
+    )
     
-    # Test OpenCV
-    if python3 -c "import cv2; print(cv2.__version__)" 2>/dev/null; then
-        info "OpenCV version: $(python3 -c 'import cv2; print(cv2.__version__)')"
-    else
-        error "OpenCV not properly installed"
-    fi
-    
-    # Test other packages
-    packages=("dlib" "face_recognition" "pyttsx3" "flask" "yaml")
-    failed_packages=()
-    
+    failed=0
     for package in "${packages[@]}"; do
-        log "Testing import of $package..."
-        if ! python3 -c "import $package" 2>/dev/null; then
-            warning "Failed to import $package"
-            failed_packages+=("$package")
+        if ! python3 -c "import ${package}" 2>/dev/null; then
+            error "Failed to import ${package}"
+            failed=1
+        else
+            info "${package} imported successfully"
         fi
     done
     
-    if [ ${#failed_packages[@]} -eq 0 ]; then
-        info "All Python packages verified successfully"
-        return 0
-    else
-        error "Failed to verify packages: ${failed_packages[*]}"
-        return 1
-    fi
+    return $failed
 }
 
 # Function to create directory structure
@@ -223,7 +180,7 @@ recognition:
 
 # Camera settings
 camera:
-  type: 'usb'  # 'usb' or 'picamera'
+  type: 'usb'
   device: 0
   brightness: 50
   contrast: 55
@@ -305,9 +262,6 @@ main() {
     # Install system dependencies
     install_system_deps
     
-    # Install Python packages
-    install_python_packages
-    
     # Create directory structure
     create_directories
     
@@ -326,7 +280,8 @@ main() {
         log "You can now run the system with: ./start-facial-recognition"
     else
         warning "Installation completed with some package verification failures"
-        log "The system may still work, but some features might be limited"
+        log "Please try running: sudo apt-get install -f"
+        log "Then run this script again"
     fi
 }
 
