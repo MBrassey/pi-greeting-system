@@ -31,31 +31,15 @@ install_system_deps() {
     # Update package lists
     apt-get update
     
-    # Install essential build dependencies
+    # Install essential packages
     apt-get install -y \
-        build-essential \
-        cmake \
-        pkg-config \
-        git \
         python3-dev \
         python3-pip \
         python3-venv \
         python3-setuptools \
         python3-opencv \
-        || true
-
-    # Install audio dependencies
-    apt-get install -y \
         espeak \
-        alsa-utils \
-        pulseaudio \
-        portaudio19-dev \
-        python3-pyaudio \
         || true
-
-    # Fix any broken installs
-    apt-get --fix-broken install -y
-    apt-get install -f -y
 }
 
 # Function to set up Python virtual environment
@@ -72,10 +56,7 @@ setup_virtualenv() {
     # Upgrade pip
     pip install --upgrade pip wheel setuptools
 
-    # Install packages one by one in specific order
-    log "Installing Python packages..."
-    
-    # Install packages with exact versions that work
+    # Install packages
     pip install \
         numpy==1.24.3 \
         opencv-python==4.8.0.74 \
@@ -287,14 +268,12 @@ class FacialRecognitionSystem:
         self.logger = logging.getLogger('FacialRecognition')
         self.logger.setLevel(logging.INFO)
         
-        # File handler
         log_file = '/var/log/facial-recognition/system.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         file_handler = RotatingFileHandler(log_file, maxBytes=10485760, backupCount=5)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(file_handler)
         
-        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         self.logger.addHandler(console_handler)
@@ -311,7 +290,7 @@ class FacialRecognitionSystem:
     def initialize_components(self):
         self.setup_storage()
         self.setup_camera()
-        self.setup_audio()
+        self.initialize_audio()
         self.setup_face_recognition()
         self.running = True
         self.frame_times = []
@@ -335,6 +314,52 @@ class FacialRecognitionSystem:
         cv2.namedWindow('Facial Recognition System', cv2.WINDOW_NORMAL)
         cv2.moveWindow('Facial Recognition System', 0, 0)
     
+    def initialize_audio(self):
+        try:
+            self.tts_engine = pyttsx3.init()
+            self.tts_engine.setProperty('rate', 150)
+            self.tts_engine.setProperty('volume', 0.8)
+            self.tts_queue = queue.Queue()
+            self.tts_thread = threading.Thread(target=self.process_tts_queue, daemon=True)
+            self.tts_thread.start()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize audio: {e}")
+    
+    def process_tts_queue(self):
+        while True:
+            try:
+                message = self.tts_queue.get(timeout=1)
+                if message:
+                    self.tts_engine.say(message)
+                    self.tts_engine.runAndWait()
+                self.tts_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"TTS Error: {e}")
+    
+    def setup_face_recognition(self):
+        self.known_face_encodings = []
+        self.known_face_names = []
+        self.load_known_faces()
+    
+    def load_known_faces(self):
+        for face_file in self.known_faces_dir.glob('*.*'):
+            if face_file.suffix.lower() in ('.png', '.jpg', '.jpeg'):
+                name = face_file.stem
+                image = face_recognition.load_image_file(str(face_file))
+                face_encodings = face_recognition.face_encodings(image)
+                if face_encodings:
+                    self.known_face_encodings.append(face_encodings[0])
+                    self.known_face_names.append(name)
+    
+    def setup_signal_handlers(self):
+        signal.signal(signal.SIGINT, self.handle_shutdown)
+        signal.signal(signal.SIGTERM, self.handle_shutdown)
+    
+    def handle_shutdown(self, signum, frame):
+        self.running = False
+    
     def get_frame(self):
         ret, frame = self.camera.read()
         if not ret:
@@ -354,9 +379,28 @@ class FacialRecognitionSystem:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             face_locations = face_recognition.face_locations(rgb_frame)
             
-            # Draw rectangles around faces
-            for (top, right, bottom, left) in face_locations:
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            if face_locations:
+                # Get face encodings
+                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                
+                # Check each face
+                for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+                    name = "Unknown"
+                    
+                    if self.known_face_encodings:
+                        matches = face_recognition.compare_faces(
+                            self.known_face_encodings, 
+                            face_encoding,
+                            tolerance=0.6
+                        )
+                        if True in matches:
+                            name = self.known_face_names[matches.index(True)]
+                            self.greet_person(name)
+                    
+                    # Draw rectangle and name
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    cv2.putText(frame, name, (left, bottom + 20),
+                              cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
             
             # Display frame
             cv2.imshow('Facial Recognition System', frame)
@@ -367,6 +411,15 @@ class FacialRecognitionSystem:
                 break
         
         self.cleanup()
+
+    def greet_person(self, name):
+        current_time = time.time()
+        last_greeting = self.last_greeting_time.get(name, 0)
+        
+        if current_time - last_greeting > 30:  # 30 seconds between greetings
+            self.last_greeting_time[name] = current_time
+            greeting = f"Hello {name}!"
+            self.tts_queue.put(greeting)
 
     def cleanup(self):
         self.camera.release()
