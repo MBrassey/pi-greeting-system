@@ -342,20 +342,26 @@ class FacialRecognitionSystem:
     
     def handle_unknown_face(self, face_encoding, face_location, frame):
         """Handle unknown face detection"""
+        # Always print when we see an unknown face
+        print("\nUnknown face detected!")
+        
         face_key = str(face_location)
         if face_key not in self.unknown_face_counters:
             self.unknown_face_counters[face_key] = 0
         
         self.unknown_face_counters[face_key] += 1
         
-        # Save unknown face after threshold
-        if self.unknown_face_counters[face_key] >= 10:
+        # Save unknown face after seeing it a few times (to ensure good quality)
+        if self.unknown_face_counters[face_key] >= 5:  # Reduced from 10 to 5 frames
             face_id = self.save_unknown_face(frame, face_location, face_encoding)
+            if face_id:
+                print(f"Saved new face as ID: {face_id}")
+                print(f"Photo saved to: data/unknown_faces/unknown_*_{face_id}.jpg")
+                print("To name this person:")
+                print(f"1. Copy their photo from unknown_faces to known_faces")
+                print("2. Rename it to their name (e.g., John.jpg)")
+                print("3. Press 'r' to reload known faces")
             self.unknown_face_counters[face_key] = -1000  # Prevent multiple saves
-            print(f"\nNew face detected! ID: {face_id}")
-            print("To name this face, save a photo of the person as their name in the data/known_faces directory")
-            print("For example: data/known_faces/John.jpg")
-            print("Then press 'r' to reload the known faces\n")
     
     def save_unknown_face(self, frame, face_location, face_encoding):
         """Save unknown face and return face_id"""
@@ -366,6 +372,14 @@ class FacialRecognitionSystem:
             
             # Extract and save face image
             top, right, bottom, left = face_location
+            # Add padding around the face
+            padding = 50
+            height, width = frame.shape[:2]
+            top = max(0, top - padding)
+            bottom = min(height, bottom + padding)
+            left = max(0, left - padding)
+            right = min(width, right + padding)
+            
             face_image = frame[top:bottom, left:right]
             face_path = self.unknown_faces_dir / filename
             cv2.imwrite(str(face_path), face_image)
@@ -434,10 +448,17 @@ class FacialRecognitionSystem:
         print("  'q' - Quit")
         print("  'r' - Reload known faces")
         print("  's' - Toggle performance stats")
-        print("\nTo add known faces:")
-        print("1. Save a clear photo of the person in data/known_faces/")
-        print("2. Name the file as the person's name (e.g., data/known_faces/John.jpg)")
-        print("3. Press 'r' to reload the known faces\n")
+        print("\nFace Management:")
+        print("- Known faces are loaded from: data/known_faces/")
+        print("- Unknown faces are saved to: data/unknown_faces/")
+        print("- To name someone:")
+        print("  1. Copy their photo from unknown_faces to known_faces")
+        print("  2. Rename it to their name (e.g., John.jpg)")
+        print("  3. Press 'r' to reload\n")
+        
+        if self.known_face_names:
+            print("Currently known people:", ", ".join(self.known_face_names))
+        print("\nWaiting for faces...")
         
         while self.running:
             try:
@@ -470,7 +491,7 @@ class FacialRecognitionSystem:
                     print(f"Loaded {len(self.known_face_names)} known faces")
                     if self.known_face_names:
                         print("Known people:", ", ".join(self.known_face_names))
-                    print()
+                    print("\nWaiting for faces...")
                 elif key == ord('s'):
                     self.show_stats = not self.show_stats
                 
