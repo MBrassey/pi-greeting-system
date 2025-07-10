@@ -20,13 +20,30 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Fix any broken package installations first
+echo "Fixing package system..."
+dpkg --configure -a
+apt-get update --fix-missing
+apt-get install -f -y
+
+# Clean package cache and fix any issues
+echo "Cleaning package cache..."
+apt-get clean
+apt-get autoclean
+
 # Update system packages
 echo "Updating system packages..."
-apt update && apt upgrade -y
+apt-get update
+apt-get upgrade -y
 
-# Install OpenSSH server if not present
+# Install OpenSSH server
 echo "Installing OpenSSH server..."
-apt install -y openssh-server
+apt-get install -y openssh-server
+
+# Enable SSH service
+echo "Enabling SSH service..."
+systemctl enable ssh
+systemctl start ssh
 
 # Create engineer user if doesn't exist
 if ! id "$ENGINEER_USER" &>/dev/null; then
@@ -150,17 +167,28 @@ chmod 644 /etc/ssh/banner
 chmod 600 /etc/ssh/ssh_host_*_key
 chmod 644 /etc/ssh/ssh_host_*_key.pub
 
-# Enable and start SSH service
-echo "Enabling SSH service..."
-systemctl enable ssh
-systemctl restart ssh
-
 # Configure firewall if ufw is available
 if command -v ufw &> /dev/null; then
     echo "Configuring firewall..."
     ufw allow ssh
     ufw --force enable
 fi
+
+# Test SSH configuration
+echo "Testing SSH configuration..."
+if sshd -t; then
+    echo "SSH configuration is valid"
+else
+    echo "Error: SSH configuration is invalid"
+    echo "Restoring backup configuration..."
+    cp "$SSH_CONFIG_BACKUP" "$SSH_CONFIG"
+    systemctl restart ssh
+    exit 1
+fi
+
+# Restart SSH service with new configuration
+echo "Restarting SSH service..."
+systemctl restart ssh
 
 # Display connection information
 echo ""
@@ -187,19 +215,6 @@ echo ""
 echo "Configuration backup saved to: $SSH_CONFIG_BACKUP"
 echo "SSH service status:"
 systemctl status ssh --no-pager -l
-
-# Test SSH configuration
-echo ""
-echo "Testing SSH configuration..."
-if sshd -t; then
-    echo "SSH configuration is valid"
-else
-    echo "Error: SSH configuration is invalid"
-    echo "Restoring backup configuration..."
-    cp "$SSH_CONFIG_BACKUP" "$SSH_CONFIG"
-    systemctl restart ssh
-    exit 1
-fi
 
 echo ""
 echo "Setup completed successfully!"
