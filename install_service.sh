@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Service Installation Script for Raspberry Pi Facial Recognition System
-# Sets up systemd service for automatic startup
+# Sets up systemd service for automatic startup after X11 loads
 
 # Colors for output
 RED='\033[0;31m'
@@ -37,7 +37,7 @@ USER_HOME=$(getent passwd "$ACTUAL_USER" | cut -d: -f6)
 PROJECT_DIR=$(pwd)
 
 # Verify project files exist
-required_files=("face_recognition.py" "web_interface.py" "config.yml")
+required_files=("facial_recognition_system.py" "web_interface.py" "config.yml")
 for file in "${required_files[@]}"; do
     if [ ! -f "$PROJECT_DIR/$file" ]; then
         error "Required file $file not found in $PROJECT_DIR"
@@ -51,7 +51,7 @@ if [ ! -d "$PROJECT_DIR/venv" ]; then
     exit 1
 fi
 
-# Add user to required groups
+# Add user to required groups for hardware access
 log "Adding user to required groups..."
 usermod -a -G video,audio,gpio,i2c $ACTUAL_USER
 
@@ -60,8 +60,8 @@ log "Creating face recognition service..."
 cat > /etc/systemd/system/facial-recognition.service << EOF
 [Unit]
 Description=Facial Recognition System
-After=network.target graphical.target
-Wants=network-online.target
+After=graphical.target
+Wants=graphical.target
 Requires=dev-video0.device
 ConditionPathExists=/dev/video0
 
@@ -71,19 +71,25 @@ User=$ACTUAL_USER
 Group=$ACTUAL_USER
 WorkingDirectory=$PROJECT_DIR
 Environment=PATH=$PROJECT_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=$USER_HOME
+Environment=USER=$ACTUAL_USER
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=$USER_HOME/.Xauthority
-Environment=LIBCAMERA_LOG_LEVELS=3
-Environment=LD_PRELOAD=/usr/lib/arm-linux-gnueabihf/libatomic.so.1
-ExecStartPre=/bin/sleep 5
-ExecStart=$PROJECT_DIR/venv/bin/python face_recognition.py
+
+# Wait for X11 to be ready
+ExecStartPre=/bin/bash -c 'while ! pgrep -x "Xorg" > /dev/null; do sleep 1; done'
+ExecStartPre=/bin/sleep 3
+
+# Start the facial recognition system
+ExecStart=$PROJECT_DIR/venv/bin/python facial_recognition_system.py
+
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/facial-recognition/system.log
 StandardError=append:/var/log/facial-recognition/system.log
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 EOF
 
 # Create systemd service file for web interface
@@ -93,7 +99,6 @@ cat > /etc/systemd/system/facial-recognition-web.service << EOF
 Description=Facial Recognition Web Interface
 After=network.target
 Wants=network-online.target
-Requires=facial-recognition.service
 
 [Service]
 Type=simple
@@ -101,7 +106,11 @@ User=$ACTUAL_USER
 Group=$ACTUAL_USER
 WorkingDirectory=$PROJECT_DIR
 Environment=PATH=$PROJECT_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=$USER_HOME
+Environment=USER=$ACTUAL_USER
+
 ExecStart=$PROJECT_DIR/venv/bin/python web_interface.py
+
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/facial-recognition/web.log
@@ -145,6 +154,7 @@ EOF
 # Reload systemd configuration
 log "Reloading systemd configuration..."
 systemctl daemon-reload
+udevadm control --reload-rules
 
 # Enable services
 log "Enabling services..."
@@ -158,28 +168,31 @@ log "Creating convenience scripts..."
 cat > "$PROJECT_DIR/service_start.sh" << EOF
 #!/bin/bash
 sudo systemctl start facial-recognition facial-recognition-web
+sudo systemctl status facial-recognition facial-recognition-web --no-pager
 EOF
 
 # Stop script
 cat > "$PROJECT_DIR/service_stop.sh" << EOF
 #!/bin/bash
 sudo systemctl stop facial-recognition facial-recognition-web
+sudo systemctl status facial-recognition facial-recognition-web --no-pager
 EOF
 
 # Restart script
 cat > "$PROJECT_DIR/service_restart.sh" << EOF
 #!/bin/bash
 sudo systemctl restart facial-recognition facial-recognition-web
+sudo systemctl status facial-recognition facial-recognition-web --no-pager
 EOF
 
 # Status script
 cat > "$PROJECT_DIR/service_status.sh" << EOF
 #!/bin/bash
 echo "=== Facial Recognition System Status ==="
-sudo systemctl status facial-recognition
+sudo systemctl status facial-recognition --no-pager
 echo
 echo "=== Web Interface Status ==="
-sudo systemctl status facial-recognition-web
+sudo systemctl status facial-recognition-web --no-pager
 EOF
 
 # Make scripts executable
@@ -222,13 +235,13 @@ EOF
 chmod +x "$PROJECT_DIR/uninstall_service.sh"
 chown $ACTUAL_USER:$ACTUAL_USER "$PROJECT_DIR/uninstall_service.sh"
 
-# Start services
-log "Starting services..."
+# Start services for testing
+log "Starting services for testing..."
 systemctl start facial-recognition.service
 systemctl start facial-recognition-web.service
 
 # Check service status
-sleep 2
+sleep 3
 facial_status=$(systemctl is-active facial-recognition)
 web_status=$(systemctl is-active facial-recognition-web)
 
@@ -246,34 +259,10 @@ echo -e "Restart services: ${BLUE}./service_restart.sh${NC}"
 echo -e "Check status:     ${BLUE}./service_status.sh${NC}"
 echo ""
 echo -e "${GREEN}=== NEXT STEPS ===${NC}"
-echo "1. Check service status: sudo systemctl status facial-recognition"
-echo "2. View logs: tail -f /var/log/facial-recognition/system.log"
-echo "3. Access web interface: http://localhost:8080"
-echo ""
-echo -e "${YELLOW}Note: You may need to reboot for all changes to take effect${NC}"
-
-# Check for potential issues
-echo ""
-echo -e "${BLUE}Performing final checks...${NC}"
-
-# Check if services are running
-if [ "$facial_status" != "active" ] || [ "$web_status" != "active" ]; then
-    warning "One or more services failed to start. Check logs for details:"
-    echo "sudo journalctl -u facial-recognition -n 50"
-    echo "sudo journalctl -u facial-recognition-web -n 50"
-fi
-
-# Check for common configuration issues
-if ! grep -q "DISPLAY=:0" /etc/systemd/system/facial-recognition.service; then
-    warning "Display environment variable might not be set correctly"
-fi
-
-if ! groups $ACTUAL_USER | grep -q "video"; then
-    warning "User might need to log out and back in for group changes to take effect"
-fi
-
-# Final instructions
+echo "1. Reboot system: sudo reboot"
+echo "2. System will automatically start facial recognition after boot"
+echo "3. Check web interface: http://$(hostname -I | awk '{print $1}'):8080"
+echo "4. View logs: tail -f /var/log/facial-recognition/system.log"
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
-echo -e "${YELLOW}Please reboot your system to ensure all changes take effect:${NC}"
-echo "sudo reboot" 
+echo -e "${YELLOW}Reboot to activate automatic startup:${NC} ${BLUE}sudo reboot${NC}" 
